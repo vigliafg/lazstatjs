@@ -75,6 +75,13 @@ const fmtP = (p: number) => {
   return p.toFixed(4);
 };
 
+const parseNum = (x: string | number | undefined | null): number => {
+  if (x === undefined || x === null) return NaN;
+  if (typeof x === 'number') return x;
+  const clean = x.trim().replace(',', '.');
+  return parseFloat(clean);
+};
+
 const validateValue = (val: string, type: ColType) => {
   if (val === '' || val === null) return true;
   const ti = COL_TYPES.find(t => t.id === type) || COL_TYPES[0];
@@ -196,7 +203,7 @@ export default function App() {
   const runDescriptive = () => {
     const results = descVars.map(vIdx => {
       const col = grid.cols[vIdx];
-      const data = grid.rows.map(r => parseFloat(r[vIdx])).filter(v => !isNaN(v));
+      const data = grid.rows.map(r => parseNum(r[vIdx])).filter(v => !isNaN(v));
       if (data.length === 0) return null;
 
       const n = data.length;
@@ -359,8 +366,8 @@ export default function App() {
 
   const runTTest = () => {
     const { type, var1, var2, mu, ci } = ttestParams;
-    const a1 = grid.rows.map(r => parseFloat(r[var1])).filter(v => !isNaN(v));
-    const a2 = grid.rows.map(r => parseFloat(r[var2])).filter(v => !isNaN(v));
+    const a1 = grid.rows.map(r => parseNum(r[var1])).filter(v => !isNaN(v));
+    const a2 = grid.rows.map(r => parseNum(r[var2])).filter(v => !isNaN(v));
 
     if (a1.length === 0 || (type !== 'one' && a2.length === 0)) {
       showToast('Error', 'Insufficient data for T-Test', 'error');
@@ -562,7 +569,7 @@ export default function App() {
     // Group data
     const groups: { [key: string]: number[] } = {};
     grid.rows.forEach(row => {
-      const d = parseFloat(row[dep]);
+      const d = parseNum(row[dep]);
       const g = row[grp];
       if (!isNaN(d) && g !== '') {
         if (!groups[g]) groups[g] = [];
@@ -603,7 +610,7 @@ export default function App() {
 
     // Post-Hoc Analysis
     let postHocResults: any[] = [];
-    if (p < 0.05 && anovaParams.posthoc !== 'none') {
+    if (anovaParams.posthoc !== 'none') {
       const numComps = (k * (k - 1)) / 2;
       for (let i = 0; i < groupKeys.length; i++) {
         for (let j = i + 1; j < groupKeys.length; j++) {
@@ -615,26 +622,27 @@ export default function App() {
           const m2 = jStat.mean(groups[g2]);
           const diff = m1 - m2;
           
-          let pVal = 0;
+          let pVal = 1;
           let testName = "";
 
           if (anovaParams.posthoc === 'tukey') {
-            // Tukey-Kramer approximation using T-distribution
-            const se = Math.sqrt((msWithin / 2) * (1 / n1 + 1 / n2));
-            const q = Math.abs(diff) / se;
-            // Approximation: p-value from studentized range is roughly 
-            // related to T-distribution but with adjusted alpha or df.
-            // For simplicity and robustness in a JS environment without q-table:
-            const t = diff / (Math.sqrt(msWithin * (1/n1 + 1/n2)));
-            pVal = 2 * (1 - jStat.studentt.cdf(Math.abs(t), dfWithin));
-            // Tukey adjustment (conservative approximation)
-            pVal = Math.min(1, pVal * (k - 1)); 
             testName = "Tukey HSD (approx)";
+            if (msWithin > 0) {
+              const t = diff / (Math.sqrt(msWithin * (1/n1 + 1/n2)));
+              pVal = 2 * (1 - jStat.studentt.cdf(Math.abs(t), dfWithin));
+              pVal = Math.min(1, pVal * (k - 1));
+            } else {
+              pVal = diff === 0 ? 1 : 0;
+            }
           } else if (anovaParams.posthoc === 'bonferroni') {
-            const t = diff / (Math.sqrt(msWithin * (1/n1 + 1/n2)));
-            pVal = 2 * (1 - jStat.studentt.cdf(Math.abs(t), dfWithin));
-            pVal = Math.min(1, pVal * numComps);
             testName = "Bonferroni";
+            if (msWithin > 0) {
+              const t = diff / (Math.sqrt(msWithin * (1/n1 + 1/n2)));
+              pVal = 2 * (1 - jStat.studentt.cdf(Math.abs(t), dfWithin));
+              pVal = Math.min(1, pVal * numComps);
+            } else {
+              pVal = diff === 0 ? 1 : 0;
+            }
           }
 
           postHocResults.push({
@@ -647,10 +655,18 @@ export default function App() {
       }
     }
 
-    const anovaChartData = groupKeys.map(key => ({
-      name: key,
-      mean: jStat.mean(groups[key])
-    }));
+    const anovaBoxPlotData = groupKeys.map(key => {
+      const vals = groups[key];
+      const quartiles = jStat.quartiles(vals);
+      return {
+        x: key,
+        min: jStat.min(vals),
+        q1: quartiles[0],
+        median: jStat.median(vals),
+        q3: quartiles[2],
+        max: jStat.max(vals)
+      };
+    });
 
     const output = (
       <div className="output-block" key={Date.now()}>
@@ -702,19 +718,15 @@ export default function App() {
               tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
               style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
             />
-            <VictoryBar
-              data={anovaChartData.map(d => ({ x: d.name, y: d.mean }))}
-              style={{ data: { fill: '#34d399', width: 30 } }}
-              labels={({ datum }) => `Mean: ${fmt(datum.y)}`}
-              labelComponent={<VictoryTooltip style={{ fontSize: 10 }} flyoutStyle={{ fill: '#1e1e1e', stroke: '#333' }} />}
-            />
-            <VictoryErrorBar
-              data={groupKeys.map(key => ({
-                x: key,
-                y: jStat.mean(groups[key]),
-                error: jStat.stdev(groups[key], true) / Math.sqrt(groups[key].length)
-              }))}
-              style={{ data: { stroke: "#fff", strokeWidth: 2 } }}
+            <VictoryBoxPlot
+              data={anovaBoxPlotData}
+              style={{
+                min: { stroke: "#f87171", strokeWidth: 2 },
+                max: { stroke: "#f87171", strokeWidth: 2 },
+                q1: { fill: "#34d399", fillOpacity: 0.5 },
+                q3: { fill: "#34d399", fillOpacity: 0.5 },
+                median: { stroke: "#fff", strokeWidth: 2 }
+              }}
             />
           </VictoryChart>
         </div>
@@ -732,9 +744,9 @@ export default function App() {
 
     // Filter valid rows
     const validRows = grid.rows.filter(row => {
-      const y = parseFloat(row[dep]);
+      const y = parseNum(row[dep]);
       if (isNaN(y)) return false;
-      return indeps.every(idx => !isNaN(parseFloat(row[idx])));
+      return indeps.every(idx => !isNaN(parseNum(row[idx])));
     });
 
     if (validRows.length <= indeps.length + 1) {
@@ -742,38 +754,130 @@ export default function App() {
       return;
     }
 
-    const Y = validRows.map(row => parseFloat(row[dep]));
-    const X = validRows.map(row => [1, ...indeps.map(idx => parseFloat(row[idx]))]);
+    // Check for zero variance in predictors
+    for (const idx of indeps) {
+      const vals = validRows.map(row => parseNum(row[idx]));
+      const mean = jStat.mean(vals);
+      const sumSqDiff = vals.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0);
+      if (sumSqDiff === 0) {
+        showToast('Error', `Predictor '${grid.cols[idx].name}' has zero variance (all values are identical).`, 'error');
+        return;
+      }
+    }
 
-    // Simple Linear Regression (1 predictor) or Multiple
-    const ols = jStat.models.ols(Y, X);
-    const coef = ols.coef;
-    const R2 = ols.R2;
-    
+    const Y = validRows.map(row => parseNum(row[dep]));
+    const X = validRows.map(row => [1, ...indeps.map(idx => parseNum(row[idx]))]);
+
     const n = Y.length;
     const k = indeps.length;
     const df = n - k - 1;
-    const rss = ols.resid.reduce((a: number, b: number) => a + b * b, 0);
-    const mse = rss / df;
-    
-    // X'X inverse
-    const Xt = jStat.transpose(X);
-    const XtX = jStat.multiply(Xt, X);
-    const XtXinv = jStat.inv(XtX);
-    
-    const se = coef.map((_: any, i: number) => Math.sqrt(mse * XtXinv[i][i]));
-    const tStats = coef.map((c: number, i: number) => c / se[i]);
-    const pValues = tStats.map((t: number) => 2 * (1 - jStat.studentt.cdf(Math.abs(t), df)));
+
+    let coef: number[] = [];
+    let R2 = 0;
+    let se: number[] = [];
+    let tStats: number[] = [];
+    let pValues: number[] = [];
+
+    try {
+      if (k === 1) {
+        // Analytical path for simple linear regression (highly stable, avoids QR decomposition instability)
+        const xs = validRows.map(row => parseNum(row[indeps[0]]));
+        const ys = Y;
+
+        const meanX = jStat.mean(xs);
+        const meanY = jStat.mean(ys);
+
+        let sumXX = 0;
+        let sumYY = 0;
+        let sumXY = 0;
+        for (let i = 0; i < n; i++) {
+          const diffX = xs[i] - meanX;
+          const diffY = ys[i] - meanY;
+          sumXX += diffX * diffX;
+          sumYY += diffY * diffY;
+          sumXY += diffX * diffY;
+        }
+
+        const slope = sumXY / sumXX;
+        const intercept = meanY - slope * meanX;
+        coef = [intercept, slope];
+
+        // Residual sum of squares
+        const residuals = ys.map((y, i) => y - (intercept + slope * xs[i]));
+        const rss = residuals.reduce((sum, r) => sum + r * r, 0);
+        const mse = rss / df;
+
+        R2 = sumYY === 0 ? 0 : 1 - (rss / sumYY);
+        if (R2 < 0) R2 = 0;
+
+        const seSlope = Math.sqrt(mse / sumXX);
+        const seIntercept = Math.sqrt(mse * (1 / n + (meanX * meanX) / sumXX));
+        se = [seIntercept, seSlope];
+
+        tStats = [intercept / seIntercept, slope / seSlope];
+        pValues = tStats.map(t => 2 * (1 - jStat.studentt.cdf(Math.abs(t), df)));
+      } else {
+        // Fallback to jStat models for multiple regression
+        const ols = jStat.models.ols(Y, X);
+        coef = ols.coef;
+        R2 = ols.R2;
+        const rss = ols.resid.reduce((a: number, b: number) => a + b * b, 0);
+        const mse = rss / df;
+
+        // X'X inverse
+        const Xt = jStat.transpose(X);
+        const XtX = jStat.multiply(Xt, X);
+        const XtXinv = jStat.inv(XtX);
+
+        se = coef.map((_: any, i: number) => Math.sqrt(mse * XtXinv[i][i]));
+        tStats = coef.map((c: number, i: number) => c / se[i]);
+        pValues = tStats.map(t => 2 * (1 - jStat.studentt.cdf(Math.abs(t), df)));
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error', 'Regression failed. Please check if variables are collinear or have insufficient variance.', 'error');
+      return;
+    }
 
     const scatterData = validRows.map(row => ({
-      x: parseFloat(row[indeps[0]]),
-      y: parseFloat(row[dep])
-    }));
+      x: parseNum(row[indeps[0]]),
+      y: parseNum(row[dep])
+    })).filter(d => !isNaN(d.x) && !isNaN(d.y));
 
     const coefData = indeps.map((idx, i) => ({
       name: grid.cols[idx].name,
       value: coef[i + 1]
     }));
+
+    // Calculate bounds and regression line data if simple linear regression
+    let regLineData: { x: number; y: number }[] = [];
+    let xDomain: [number, number] | undefined = undefined;
+    let yDomain: [number, number] | undefined = undefined;
+
+    if (indeps.length === 1 && scatterData.length > 0) {
+      const xs = scatterData.map(d => d.x);
+      const ys = scatterData.map(d => d.y);
+      const minX = Math.min(...xs);
+      const maxX = Math.max(...xs);
+      const minY = Math.min(...ys);
+      const maxY = Math.max(...ys);
+
+      const yAtMinX = coef[0] + coef[1] * minX;
+      const yAtMaxX = coef[0] + coef[1] * maxX;
+
+      regLineData = [
+        { x: minX, y: yAtMinX },
+        { x: maxX, y: yAtMaxX }
+      ];
+
+      const xRange = maxX - minX || 1;
+      const yMinVal = Math.min(minY, yAtMinX, yAtMaxX);
+      const yMaxVal = Math.max(maxY, yAtMinX, yAtMaxX);
+      const yRange = yMaxVal - yMinVal || 1;
+
+      xDomain = [minX - xRange * 0.05, maxX + xRange * 0.05];
+      yDomain = [yMinVal - yRange * 0.05, yMaxVal + yRange * 0.05];
+    }
 
     const output = (
       <div className="output-block" key={Date.now()}>
@@ -810,6 +914,8 @@ export default function App() {
           <div className="h-[300px] w-full mt-6 bg-surface3/30 rounded p-2">
             <VictoryChart
               theme={VictoryTheme.material}
+              scale={{ x: "linear", y: "linear" }}
+              domain={xDomain && yDomain ? { x: xDomain, y: yDomain } : undefined}
               padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
             >
               <VictoryAxis
@@ -835,10 +941,7 @@ export default function App() {
                 style={{ data: { fill: '#4f9cf9' } }}
               />
               <VictoryLine
-                data={[
-                  { x: jStat.min(scatterData.map(d => d.x)), y: coef[0] + coef[1] * jStat.min(scatterData.map(d => d.x)) },
-                  { x: jStat.max(scatterData.map(d => d.x)), y: coef[0] + coef[1] * jStat.max(scatterData.map(d => d.x)) }
-                ]}
+                data={regLineData}
                 style={{ data: { stroke: '#f87171', strokeWidth: 2 } }}
               />
             </VictoryChart>
@@ -895,7 +998,7 @@ export default function App() {
         const v2 = vars[j];
         
         // Pairwise deletion
-        const pairs = grid.rows.map(row => [parseFloat(row[v1]), parseFloat(row[v2])])
+        const pairs = grid.rows.map(row => [parseNum(row[v1]), parseNum(row[v2])])
           .filter(p => !isNaN(p[0]) && !isNaN(p[1]));
         
         if (pairs.length < 3) {
@@ -969,7 +1072,7 @@ export default function App() {
                 }}
               />
               <VictoryScatter
-                data={grid.rows.map(r => ({ x: parseFloat(r[vars[0]]), y: parseFloat(r[vars[1]]) })).filter(p => !isNaN(p.x) && !isNaN(p.y))}
+                data={grid.rows.map(r => ({ x: parseNum(r[vars[0]]), y: parseNum(r[vars[1]]) })).filter(p => !isNaN(p.x) && !isNaN(p.y))}
                 style={{ data: { fill: '#fb923c' } }}
               />
             </VictoryChart>
