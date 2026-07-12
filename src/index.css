@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+
+  --color-bg: #0d0f14;
+  --color-surface: #13161e;
+  --color-surface2: #1a1e28;
+  --color-surface3: #222738;
+  --color-border: #2a2f3f;
+  --color-border2: #343a50;
+  --color-accent: #4f9cf9;
+  --color-accent2: #38bdf8;
+  --color-green: #34d399;
+  --color-yellow: #fbbf24;
+  --color-red: #f87171;
+  --color-purple: #a78bfa;
+  --color-text: #e2e8f0;
+  --color-text2: #94a3b8;
+  --color-text3: #64748b;
+}
+
+@layer base {
+  body {
+    @apply bg-bg text-text font-sans text-[13px] h-screen flex flex-col overflow-hidden;
+  }
+}
+
+@layer components {
+  .scrollbar::-webkit-scrollbar {
+    @apply w-1.5 h-1.5;
+  }
+  .scrollbar::-webkit-scrollbar-track {
+    @apply bg-surface;
+  }
+  .scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-border2 rounded-full;
+  }
+
+  /* Custom classes for the statistical app */
+  .main-tab {
+    @apply font-mono text-[11px] tracking-widest uppercase px-5 py-1.5 cursor-pointer text-text3 border border-transparent border-b-0 rounded-t transition-all relative -bottom-px select-none;
+  }
+  .main-tab:hover {
+    @apply text-text2 bg-surface3;
+  }
+  .main-tab.active {
+    @apply text-accent bg-bg border-border border-b-bg;
+  }
+
+  .atab {
+    @apply px-4 py-2 text-[11px] text-text3 cursor-pointer border-r border-border whitespace-nowrap transition-all font-mono tracking-tight;
+  }
+  .atab:hover {
+    @apply text-text2 bg-surface2;
+  }
+  .atab.active {
+    @apply text-accent bg-surface2 border-b-2 border-b-accent;
+  }
+
+  .panel-header {
+    @apply bg-surface border-b border-border px-3 py-1.5 font-mono text-[11px] text-text3 tracking-widest uppercase flex items-center gap-2 shrink-0;
+  }
+
+  .tb-btn {
+    @apply bg-surface3 border border-border2 text-text2 font-sans text-[11px] px-2.5 py-1 cursor-pointer rounded transition-all hover:bg-accent hover:text-white hover:border-accent;
+  }
+
+  .output-block {
+    @apply mb-6;
+  }
+
+  .output-title {
+    @apply text-accent2 font-semibold text-[12px] tracking-widest uppercase mb-2 pb-1.5 border-b border-border2;
+  }
+
+  .output-table {
+    @apply border-collapse w-full mb-2;
+  }
+  .output-table th {
+    @apply bg-surface2 border border-border px-3 py-1 text-accent text-[11px] text-left font-medium;
+  }
+  .output-table td {
+    @apply border border-border px-3 py-0.5 text-text2 text-[11px];
+  }
+  .output-table tr:nth-child(even) td {
+    @apply bg-white/5;
+  }
+
+  .summary-box {
+    @apply bg-linear-to-br from-surface2 to-surface border border-border2 border-l-4 border-l-green rounded-r-md p-4 mt-4;
+  }
+
+  /* THE FIX: Margine di rispetto inferiore */
+  #output-content {
+    @apply flex-1 overflow-auto p-4 font-mono text-[12px] leading-relaxed text-text2 bg-bg min-h-0 pb-32;
+  }
+}

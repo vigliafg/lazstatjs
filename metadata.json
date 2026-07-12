@@ -1,0 +1,5 @@
+{
+  "name": "LazStats JS",
+  "description": "A comprehensive statistical analysis tool in the browser with real-time plotting and descriptive statistics.",
+  "requestFramePermissions": []
+}
