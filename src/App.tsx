@@ -2919,7 +2919,20 @@ export default function App() {
                 </div>
               ) : (
                 <div className="max-w-4xl mx-auto">
-                  {outputs}
+                  {outputs.map((output, i) => (
+                    <div key={`wrapper-${i}`}>
+                      {i > 0 && (
+                        <div className="output-separator">
+                          <div className="output-separator-dot">
+                            <span />
+                            <span />
+                            <span />
+                          </div>
+                        </div>
+                      )}
+                      {output}
+                    </div>
+                  ))}
                   <div ref={outputEndRef} />
                 </div>
               )}
