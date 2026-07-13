@@ -27,8 +27,21 @@ import {
   VictoryBoxPlot, 
   VictoryErrorBar,
   VictoryTheme,
-  VictoryLabel
+  VictoryLabel,
+  VictoryGroup,
+  VictoryLegend
 } from 'victory';
+
+import { 
+  calcFisherExact, 
+  calcWilcoxonSignedRank, 
+  calcMannWhitneyU, 
+  calcKruskalWallis, 
+  calcTheilSen, 
+  calcKendallTau,
+  calcNormalityTests,
+  NormalityResult
+} from './statsHelpers';
 
 // --- Types ---
 type ColType = 'num' | 'int' | 'dec' | 'str' | 'alp' | 'chr' | 'bol' | 'dat';
@@ -159,23 +172,43 @@ export default function App() {
     var1: 0,
     var2: 1,
     mu: 0,
-    ci: 95
+    ci: 95,
+    useNonParam: true,
+    continuityCorr: true
   });
 
   const [anovaParams, setAnovaParams] = useState({
     dep: 0,
     grp: 2,
-    posthoc: 'none'
+    posthoc: 'none',
+    useNonParam: true,
+    kwPosthoc: 'bonferroni' as 'none' | 'bonferroni'
   });
 
   const [regParams, setRegParams] = useState({
     dep: 1,
-    indeps: [0] as number[]
+    indeps: [0] as number[],
+    useNonParam: true,
+    robustEstimator: 'theilsen'
   });
 
   const [corrParams, setCorrParams] = useState({
     vars: [0, 1] as number[],
-    method: 'pearson'
+    method: 'pearson',
+    showSpearman: true,
+    showKendall: true
+  });
+
+  const [chisqParams, setChisqParams] = useState({
+    row1col1: 30,
+    row1col2: 20,
+    row2col1: 15,
+    row2col2: 35,
+    row1Label: 'Group A',
+    row2Label: 'Group B',
+    col1Label: 'Success',
+    col2Label: 'Failure',
+    runFisherExact: true
   });
 
   const runAnalysis = () => {
@@ -194,6 +227,9 @@ export default function App() {
         break;
       case 'correlation':
         runCorrelation();
+        break;
+      case 'chisquare':
+        runChiSquare();
         break;
       default:
         showToast('Analysis', 'Analysis type not implemented yet', 'warn');
@@ -228,9 +264,37 @@ export default function App() {
         y: count
       }));
 
+      // Normality calculations
+      const normality = calcNormalityTests(data);
+
+      // Q-Q Plot calculations
+      const sortedData = [...data].sort((a, b) => a - b);
+      const qqData = sortedData.map((val, idx) => {
+        const p = (idx + 1 - 0.375) / (n + 0.25);
+        const theoreticalQuantile = jStat.normal.inv(p, 0, 1);
+        return {
+          x: theoreticalQuantile,
+          y: val
+        };
+      });
+
+      const q25 = jStat.normal.inv(0.25, 0, 1);
+      const q75 = jStat.normal.inv(0.75, 0, 1);
+      const x25 = quartiles[0];
+      const x75 = quartiles[2];
+      const qqSlope = (isNaN(stdev) || stdev === 0) ? 0 : (x75 - x25) / (q75 - q25);
+      const qqIntercept = x25 - qqSlope * q25;
+
+      const xMin = -3.0;
+      const xMax = 3.0;
+      const qqLineData = [
+        { x: xMin, y: qqSlope * xMin + qqIntercept },
+        { x: xMax, y: qqSlope * xMax + qqIntercept }
+      ];
+
       return { 
         name: col.name, n, mean, median, stdev, min, max, range, sum, variance, skewness, kurtosis,
-        q1: quartiles[0], q3: quartiles[2], histData
+        q1: quartiles[0], q3: quartiles[2], histData, normality, qqData, qqLineData
       };
     }).filter(r => r !== null);
 
@@ -252,6 +316,7 @@ export default function App() {
               <th>Min</th>
               <th>Max</th>
               <th>Median</th>
+              <th>IQR (Q3-Q1)</th>
             </tr>
           </thead>
           <tbody>
@@ -264,6 +329,7 @@ export default function App() {
                 <td>{fmt(r.min)}</td>
                 <td>{fmt(r.max)}</td>
                 <td>{fmt(r.median)}</td>
+                <td>{r ? fmt(r.q3 - r.q1) : ''}</td>
               </tr>
             ))}
           </tbody>
@@ -359,13 +425,94 @@ export default function App() {
             </VictoryChart>
           </div>
         )}
+
+        {results.length > 0 && (
+          <div className="mt-8 border-t border-border/40 pt-6">
+            <h3 className="text-xs font-mono uppercase tracking-widest text-text2 mb-4">Normality Diagnostics & Q-Q Plots</h3>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+              {results.map((r, rIdx) => {
+                const isNormalJB = r.normality.jbPValue > 0.05;
+                const isNormalKS = r.normality.ksPValue > 0.05;
+                
+                return (
+                  <div key={rIdx} className="bg-surface3/30 border border-border2 rounded-lg p-4 flex flex-col justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-accent mb-3 font-mono tracking-wider">{r.name}</h4>
+                      
+                      <div className="grid grid-cols-2 gap-4 mb-4 text-[11px] font-mono text-text2 bg-surface2/40 rounded p-3 border border-border/40">
+                        <div>
+                          <div className="text-[9px] text-text3 uppercase mb-1 font-semibold tracking-tighter font-sans">Jarque-Bera Test</div>
+                          <div>JB Stat: <span className="text-text font-semibold">{fmt(r.normality.jbStat)}</span></div>
+                          <div>p-value: <span className={`font-bold ${isNormalJB ? 'text-green' : 'text-red/90'}`}>{fmt(r.normality.jbPValue)}</span></div>
+                          <div className="text-[10px] mt-1 text-text3 font-sans">
+                            {isNormalJB ? '✓ Normal' : '✗ Non-Normal'}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] text-text3 uppercase mb-1 font-semibold tracking-tighter font-sans">Kolmogorov-Smirnov</div>
+                          <div>D Stat: <span className="text-text font-semibold">{fmt(r.normality.ksStat)}</span></div>
+                          <div>p-value: <span className={`font-bold ${isNormalKS ? 'text-green' : 'text-red/90'}`}>{fmt(r.normality.ksPValue)}</span></div>
+                          <div className="text-[10px] mt-1 text-text3 font-sans">
+                            {isNormalKS ? '✓ Normal' : '✗ Non-Normal'}
+                          </div>
+                        </div>
+                        <div className="col-span-2 border-t border-border/30 pt-2 mt-1 grid grid-cols-2 font-sans">
+                          <div>Skewness: <span className="text-text font-semibold font-mono">{fmt(r.skewness)}</span></div>
+                          <div>Kurtosis (ex): <span className="text-text font-semibold font-mono">{fmt(r.kurtosis)}</span></div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="h-[260px] w-full bg-surface2/20 rounded p-1">
+                      <p className="text-[9px] text-text3 uppercase tracking-tighter text-center mb-1 font-mono">Normal Q-Q Plot</p>
+                      <VictoryChart
+                        theme={VictoryTheme.material}
+                        padding={{ top: 15, bottom: 40, left: 55, right: 15 }}
+                      >
+                        <VictoryAxis
+                          label="Theoretical Quantiles"
+                          style={{ 
+                            axis: { stroke: '#444' }, 
+                            axisLabel: { fill: '#888', fontSize: 9, padding: 25 },
+                            tickLabels: { fill: '#888', fontSize: 8 },
+                            grid: { stroke: '#333', strokeDasharray: '3 3' }
+                          }}
+                        />
+                        <VictoryAxis
+                          dependentAxis
+                          label="Observed Values"
+                          style={{ 
+                            axis: { stroke: '#444' }, 
+                            axisLabel: { fill: '#888', fontSize: 9, padding: 35 },
+                            tickLabels: { fill: '#888', fontSize: 8 },
+                            grid: { stroke: '#333', strokeDasharray: '3 3' }
+                          }}
+                        />
+                        <VictoryScatter
+                          data={r.qqData}
+                          style={{ data: { fill: '#4f9cf9', fillOpacity: 0.8, r: 3 } }}
+                          labels={({ datum }) => `Obs: ${fmt(datum.y)}\nTh: ${fmt(datum.x)}`}
+                          labelComponent={<VictoryTooltip style={{ fontSize: 9 }} flyoutStyle={{ fill: '#1e1e1e', stroke: '#444' }} />}
+                        />
+                        <VictoryLine
+                          data={r.qqLineData}
+                          style={{ data: { stroke: '#ef4444', strokeWidth: 1.5 } }}
+                        />
+                      </VictoryChart>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     );
     setOutputs(prev => [...prev, output]);
   };
 
   const runTTest = () => {
-    const { type, var1, var2, mu, ci } = ttestParams;
+    const { type, var1, var2, mu, ci, useNonParam, continuityCorr } = ttestParams;
     const a1 = grid.rows.map(r => parseNum(r[var1])).filter(v => !isNaN(v));
     const a2 = grid.rows.map(r => parseNum(r[var2])).filter(v => !isNaN(v));
 
@@ -384,10 +531,26 @@ export default function App() {
       const t = (mean - mu) / se;
       const df = n - 1;
       const p = 2 * (1 - jStat.studentt.cdf(Math.abs(t), df));
-      
+
+      // Wilcoxon Signed-Rank Test
+      const wilcox = calcWilcoxonSignedRank(a1, mu);
+      const q = jStat.quartiles(a1);
+      const boxData = [
+        {
+          x: grid.cols[var1].name,
+          min: jStat.min(a1),
+          q1: q[0],
+          median: q[1],
+          q3: q[2],
+          max: jStat.max(a1)
+        }
+      ];
+
       resultHtml = (
         <div className="output-block" key={Date.now()}>
-          <div className="output-title">One-Sample T-Test: {grid.cols[var1].name}</div>
+          <div className="output-title">One-Sample T-Test & Wilcoxon Signed-Rank: {grid.cols[var1].name}</div>
+          
+          <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Parametric: One-Sample T-Test</div>
           <table className="output-table">
             <thead>
               <tr><th>N</th><th>Mean</th><th>SD</th><th>SE</th><th>t</th><th>df</th><th>p</th></tr>
@@ -404,33 +567,104 @@ export default function App() {
               </tr>
             </tbody>
           </table>
-          <p className="text-[10px] text-text3 mt-2 italic">H₀: μ = {mu} (Confidence Interval: {ci}%)</p>
-          
-          <div className="h-[250px] w-full mt-6 bg-surface3/30 rounded p-2">
-            <VictoryChart
-              theme={VictoryTheme.material}
-              domainPadding={50}
-              padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
-            >
-              <VictoryAxis
-                tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
-                style={{ axis: { stroke: '#333' } }}
-              />
-              <VictoryAxis
-                dependentAxis
-                tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
-                style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
-              />
-              <VictoryBar
-                data={[
-                  { x: 'Sample Mean', y: mean, fill: '#4f9cf9' },
-                  { x: 'Test Value (μ)', y: mu, fill: '#f87171' }
-                ]}
-                style={{ data: { fill: ({ datum }) => datum.fill, width: 40 } }}
-                labels={({ datum }) => `${datum.x}: ${fmt(datum.y)}`}
-                labelComponent={<VictoryTooltip style={{ fontSize: 10 }} flyoutStyle={{ fill: '#1e1e1e', stroke: '#333' }} />}
-              />
-            </VictoryChart>
+          <p className="text-[10px] text-text3 mt-1 italic mb-6">H₀: μ = {mu} (Confidence Interval: {ci}%)</p>
+
+          {useNonParam && !isNaN(wilcox.wStat) && (
+            <div className="border-t border-border/30 pt-4 mt-4">
+              <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric: Wilcoxon Signed-Rank Test</div>
+              <table className="output-table mb-2">
+                <thead>
+                  <tr><th>N (Effective)</th><th>W Statistic</th><th>Z Score</th><th>p-value</th><th>Sig.</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>{wilcox.nEffective}</td>
+                    <td>{fmt(wilcox.wStat)}</td>
+                    <td>{fmt(wilcox.zStat)}</td>
+                    <td className={wilcox.pValue < 0.05 ? 'text-green font-bold' : ''}>{fmtP(wilcox.pValue)}</td>
+                    <td>{wilcox.pValue < 0.05 ? '*' : ''}{wilcox.pValue < 0.01 ? '*' : ''}{wilcox.pValue < 0.001 ? '*' : ''}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div className="flex gap-4 text-[10px] text-text3 mb-6 bg-surface3/20 p-2 rounded max-w-fit">
+                <span>Sum of Positive Ranks (W⁺): <strong className="text-accent">{fmt(wilcox.posRankSum)}</strong></span>
+                <span>Sum of Negative Ranks (W⁻): <strong className="text-accent">{fmt(wilcox.negRankSum)}</strong></span>
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
+            <div className="h-[250px] bg-surface3/30 rounded p-2">
+              <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center">Parametric: Sample Distribution & Test Value (μ)</p>
+              <VictoryChart
+                theme={VictoryTheme.material}
+                domainPadding={50}
+                padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
+              >
+                <VictoryAxis
+                  tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                  style={{ axis: { stroke: '#333' } }}
+                />
+                <VictoryAxis
+                  dependentAxis
+                  tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                  style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
+                />
+                <VictoryBoxPlot
+                  data={boxData}
+                  style={{
+                    min: { stroke: "#f87171", strokeWidth: 1.5 },
+                    max: { stroke: "#f87171", strokeWidth: 1.5 },
+                    q1: { fill: "#4f9cf9", fillOpacity: 0.4 },
+                    q3: { fill: "#4f9cf9", fillOpacity: 0.4 },
+                    median: { stroke: "#fff", strokeWidth: 2 }
+                  }}
+                />
+                <VictoryLine
+                  y={() => mu}
+                  style={{ data: { stroke: '#ef4444', strokeWidth: 1.5, strokeDasharray: "4 4" } }}
+                  labels={["μ"]}
+                  labelComponent={<VictoryLabel dx={10} style={{ fill: '#ef4444', fontSize: 9 }} />}
+                />
+              </VictoryChart>
+            </div>
+
+            {useNonParam && !isNaN(wilcox.wStat) && (
+              <div className="h-[250px] bg-surface3/30 rounded p-2">
+                <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center">Non-Parametric: Boxplot & Test Value Median (H₀)</p>
+                <VictoryChart
+                  theme={VictoryTheme.material}
+                  domainPadding={50}
+                  padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
+                >
+                  <VictoryAxis
+                    tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                    style={{ axis: { stroke: '#333' } }}
+                  />
+                  <VictoryAxis
+                    dependentAxis
+                    tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                    style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
+                  />
+                  <VictoryBoxPlot
+                    data={boxData}
+                    style={{
+                      min: { stroke: "#f87171", strokeWidth: 1.5 },
+                      max: { stroke: "#f87171", strokeWidth: 1.5 },
+                      q1: { fill: "#34d399", fillOpacity: 0.4 },
+                      q3: { fill: "#34d399", fillOpacity: 0.4 },
+                      median: { stroke: "#fff", strokeWidth: 2 }
+                    }}
+                  />
+                  <VictoryLine
+                    y={() => mu}
+                    style={{ data: { stroke: '#ef4444', strokeWidth: 1.5, strokeDasharray: "4 4" } }}
+                    labels={["μ₀"]}
+                    labelComponent={<VictoryLabel dx={10} style={{ fill: '#ef4444', fontSize: 9 }} />}
+                  />
+                </VictoryChart>
+              </div>
+            )}
           </div>
         </div>
       );
@@ -441,7 +675,7 @@ export default function App() {
       const m2 = jStat.mean(a2);
       const v1 = jStat.variance(a1, true);
       const v2 = jStat.variance(a2, true);
-      
+
       // Pooled variance
       const sp2 = ((n1 - 1) * v1 + (n2 - 1) * v2) / (n1 + n2 - 2);
       const se = Math.sqrt(sp2 * (1/n1 + 1/n2));
@@ -449,11 +683,80 @@ export default function App() {
       const df = n1 + n2 - 2;
       const p = 2 * (1 - jStat.studentt.cdf(Math.abs(t), df));
 
+      // Mann-Whitney U test
+      const mw = calcMannWhitneyU(a1, a2);
+
+      const q1 = jStat.quartiles(a1);
+      const q2 = jStat.quartiles(a2);
+      const boxDataInd = [
+        {
+          x: grid.cols[var1].name,
+          min: jStat.min(a1),
+          q1: q1[0],
+          median: q1[1],
+          q3: q1[2],
+          max: jStat.max(a1)
+        },
+        {
+          x: grid.cols[var2].name,
+          min: jStat.min(a2),
+          q1: q2[0],
+          median: q2[1],
+          q3: q2[2],
+          max: jStat.max(a2)
+        }
+      ];
+
+      // Non-parametric boxplot: ranks of both groups
+      const combinedForRanks = [
+        ...a1.map(v => ({ val: v, group: 1, rank: 0 })),
+        ...a2.map(v => ({ val: v, group: 2, rank: 0 }))
+      ];
+      const N_comb = combinedForRanks.length;
+      combinedForRanks.sort((a, b) => a.val - b.val);
+      let idx_comb = 0;
+      while (idx_comb < N_comb) {
+        let j = idx_comb;
+        while (j < N_comb - 1 && combinedForRanks[j + 1].val === combinedForRanks[idx_comb].val) {
+          j++;
+        }
+        const sumRanks = ((j + 1) * (j + 2)) / 2 - (idx_comb * (idx_comb + 1)) / 2;
+        const avgRank = sumRanks / (j - idx_comb + 1);
+        for (let k_comb = idx_comb; k_comb <= j; k_comb++) {
+          combinedForRanks[k_comb].rank = avgRank;
+        }
+        idx_comb = j + 1;
+      }
+      const ranks1 = combinedForRanks.filter(item => item.group === 1).map(item => item.rank);
+      const ranks2 = combinedForRanks.filter(item => item.group === 2).map(item => item.rank);
+      const qRanks1 = jStat.quartiles(ranks1);
+      const qRanks2 = jStat.quartiles(ranks2);
+      const boxDataRanks = [
+        {
+          x: grid.cols[var1].name,
+          min: jStat.min(ranks1),
+          q1: qRanks1[0],
+          median: qRanks1[1],
+          q3: qRanks1[2],
+          max: jStat.max(ranks1)
+        },
+        {
+          x: grid.cols[var2].name,
+          min: jStat.min(ranks2),
+          q1: qRanks2[0],
+          median: qRanks2[1],
+          q3: qRanks2[2],
+          max: jStat.max(ranks2)
+        }
+      ];
+
       resultHtml = (
         <div className="output-block" key={Date.now()}>
-          <div className="output-title">Independent Samples T-Test</div>
-          <p className="text-[11px] mb-2">{grid.cols[var1].name} vs {grid.cols[var2].name}</p>
-          <table className="output-table">
+          <div className="output-title">Independent Samples T-Test & Mann-Whitney U</div>
+          <p className="text-[11px] mb-4 text-accent2">{grid.cols[var1].name} vs {grid.cols[var2].name}</p>
+          
+          <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Parametric: Independent Samples T-Test</div>
+          <table className="output-table mb-6">
             <thead>
               <tr><th>Group</th><th>N</th><th>Mean</th><th>SD</th><th>t</th><th>df</th><th>p</th></tr>
             </thead>
@@ -463,38 +766,95 @@ export default function App() {
             </tbody>
           </table>
 
-          <div className="h-[250px] w-full mt-6 bg-surface3/30 rounded p-2">
-            <VictoryChart
-              theme={VictoryTheme.material}
-              domainPadding={50}
-              padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
-            >
-              <VictoryAxis
-                tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
-                style={{ axis: { stroke: '#333' } }}
-              />
-              <VictoryAxis
-                dependentAxis
-                tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
-                style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
-              />
-              <VictoryBar
-                data={[
-                  { x: grid.cols[var1].name, y: m1, fill: '#4f9cf9' },
-                  { x: grid.cols[var2].name, y: m2, fill: '#34d399' }
-                ]}
-                style={{ data: { fill: ({ datum }) => datum.fill, width: 40 } }}
-                labels={({ datum }) => `${datum.x}: ${fmt(datum.y)}`}
-                labelComponent={<VictoryTooltip style={{ fontSize: 10 }} flyoutStyle={{ fill: '#1e1e1e', stroke: '#333' }} />}
-              />
-              <VictoryErrorBar
-                data={[
-                  { x: grid.cols[var1].name, y: m1, error: Math.sqrt(v1) / Math.sqrt(n1) },
-                  { x: grid.cols[var2].name, y: m2, error: Math.sqrt(v2) / Math.sqrt(n2) }
-                ]}
-                style={{ data: { stroke: "#fff", strokeWidth: 2 } }}
-              />
-            </VictoryChart>
+          {useNonParam && !isNaN(mw.uStat) && (
+            <div className="border-t border-border/30 pt-4 mt-4">
+              <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric: Mann-Whitney U Test (Wilcoxon Rank-Sum)</div>
+              <table className="output-table mb-6">
+                <thead>
+                  <tr><th>Group</th><th>N</th><th>Rank Sum</th><th>Mean Rank</th><th>U Statistic</th><th>Z Score</th><th>p-value</th><th>Sig.</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>{grid.cols[var1].name}</td>
+                    <td>{n1}</td>
+                    <td>{fmt(mw.sumRank1, 1)}</td>
+                    <td>{fmt(mw.meanRank1, 2)}</td>
+                    <td rowSpan={2} className="align-middle">{fmt(mw.uStat, 1)}</td>
+                    <td rowSpan={2} className="align-middle">{fmt(mw.zStat, 3)}</td>
+                    <td rowSpan={2} className={`align-middle font-bold ${mw.pValue < 0.05 ? 'text-green' : ''}`}>{fmtP(mw.pValue)}</td>
+                    <td rowSpan={2} className="align-middle">{mw.pValue < 0.05 ? '*' : ''}{mw.pValue < 0.01 ? '*' : ''}{mw.pValue < 0.001 ? '*' : ''}</td>
+                  </tr>
+                  <tr>
+                    <td>{grid.cols[var2].name}</td>
+                    <td>{n2}</td>
+                    <td>{fmt(mw.sumRank2, 1)}</td>
+                    <td>{fmt(mw.meanRank2, 2)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
+            <div className="h-[250px] bg-surface3/30 rounded p-2">
+              <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center">Parametric: Group Boxplots (Values)</p>
+              <VictoryChart
+                theme={VictoryTheme.material}
+                domainPadding={40}
+                padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
+              >
+                <VictoryAxis
+                  tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                  style={{ axis: { stroke: '#333' } }}
+                />
+                <VictoryAxis
+                  dependentAxis
+                  tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                  style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
+                />
+                <VictoryBoxPlot
+                  data={boxDataInd}
+                  style={{
+                    min: { stroke: "#f87171", strokeWidth: 1.5 },
+                    max: { stroke: "#f87171", strokeWidth: 1.5 },
+                    q1: { fill: "#4f9cf9", fillOpacity: 0.4 },
+                    q3: { fill: "#4f9cf9", fillOpacity: 0.4 },
+                    median: { stroke: "#fff", strokeWidth: 2 }
+                  }}
+                />
+              </VictoryChart>
+            </div>
+
+            {useNonParam && !isNaN(mw.uStat) && (
+              <div className="h-[250px] bg-surface3/30 rounded p-2">
+                <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center">Non-Parametric: Group Rank Boxplots</p>
+                <VictoryChart
+                  theme={VictoryTheme.material}
+                  domainPadding={40}
+                  padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
+                >
+                  <VictoryAxis
+                    tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                    style={{ axis: { stroke: '#333' } }}
+                  />
+                  <VictoryAxis
+                    dependentAxis
+                    tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                    style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
+                  />
+                  <VictoryBoxPlot
+                    data={boxDataRanks}
+                    style={{
+                      min: { stroke: "#f87171", strokeWidth: 1.5 },
+                      max: { stroke: "#f87171", strokeWidth: 1.5 },
+                      q1: { fill: "#818cf8", fillOpacity: 0.4 },
+                      q3: { fill: "#818cf8", fillOpacity: 0.4 },
+                      median: { stroke: "#fff", strokeWidth: 2 }
+                    }}
+                  />
+                </VictoryChart>
+              </div>
+            )}
           </div>
         </div>
       );
@@ -503,7 +863,7 @@ export default function App() {
       const n = Math.min(a1.length, a2.length);
       const diffs = [];
       for(let i=0; i<n; i++) diffs.push(a1[i] - a2[i]);
-      
+
       const meanDiff = jStat.mean(diffs);
       const sdDiff = jStat.stdev(diffs, true);
       const se = sdDiff / Math.sqrt(n);
@@ -511,11 +871,49 @@ export default function App() {
       const df = n - 1;
       const p = 2 * (1 - jStat.studentt.cdf(Math.abs(t), df));
 
+      // Wilcoxon Signed-Rank Test (paired differences vs 0)
+      const wilcox = calcWilcoxonSignedRank(diffs, 0);
+
+      const q1 = jStat.quartiles(a1);
+      const q2 = jStat.quartiles(a2);
+      const boxDataPaired = [
+        {
+          x: grid.cols[var1].name,
+          min: jStat.min(a1),
+          q1: q1[0],
+          median: q1[1],
+          q3: q1[2],
+          max: jStat.max(a1)
+        },
+        {
+          x: grid.cols[var2].name,
+          min: jStat.min(a2),
+          q1: q2[0],
+          median: q2[1],
+          q3: q2[2],
+          max: jStat.max(a2)
+        }
+      ];
+
+      const qDiffs = jStat.quartiles(diffs);
+      const boxDataDiffs = [
+        {
+          x: 'Differences',
+          min: jStat.min(diffs),
+          q1: qDiffs[0],
+          median: qDiffs[1],
+          q3: qDiffs[2],
+          max: jStat.max(diffs)
+        }
+      ];
+
       resultHtml = (
         <div className="output-block" key={Date.now()}>
-          <div className="output-title">Paired Samples T-Test</div>
-          <p className="text-[11px] mb-2">{grid.cols[var1].name} - {grid.cols[var2].name}</p>
-          <table className="output-table">
+          <div className="output-title">Paired Samples T-Test & Wilcoxon Signed-Rank</div>
+          <p className="text-[11px] mb-4 text-accent2">{grid.cols[var1].name} - {grid.cols[var2].name}</p>
+          
+          <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Parametric: Paired Samples T-Test</div>
+          <table className="output-table mb-6">
             <thead>
               <tr><th>Mean Diff</th><th>SD Diff</th><th>SE</th><th>t</th><th>df</th><th>p</th></tr>
             </thead>
@@ -531,31 +929,96 @@ export default function App() {
             </tbody>
           </table>
 
-          <div className="h-[250px] w-full mt-6 bg-surface3/30 rounded p-2">
-            <VictoryChart
-              theme={VictoryTheme.material}
-              domainPadding={50}
-              padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
-            >
-              <VictoryAxis
-                tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
-                style={{ axis: { stroke: '#333' } }}
-              />
-              <VictoryAxis
-                dependentAxis
-                tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
-                style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
-              />
-              <VictoryBar
-                data={[
-                  { x: grid.cols[var1].name, y: jStat.mean(a1), fill: '#4f9cf9' },
-                  { x: grid.cols[var2].name, y: jStat.mean(a2), fill: '#a78bfa' }
-                ]}
-                style={{ data: { fill: ({ datum }) => datum.fill, width: 40 } }}
-                labels={({ datum }) => `${datum.x}: ${fmt(datum.y)}`}
-                labelComponent={<VictoryTooltip style={{ fontSize: 10 }} flyoutStyle={{ fill: '#1e1e1e', stroke: '#333' }} />}
-              />
-            </VictoryChart>
+          {useNonParam && !isNaN(wilcox.wStat) && (
+            <div className="border-t border-border/30 pt-4 mt-4">
+              <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric: Wilcoxon Signed-Rank Test (Paired)</div>
+              <table className="output-table mb-2">
+                <thead>
+                  <tr><th>N (Effective)</th><th>W Statistic</th><th>Z Score</th><th>p-value</th><th>Sig.</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>{wilcox.nEffective}</td>
+                    <td>{fmt(wilcox.wStat)}</td>
+                    <td>{fmt(wilcox.zStat)}</td>
+                    <td className={wilcox.pValue < 0.05 ? 'text-green font-bold' : ''}>{fmtP(wilcox.pValue)}</td>
+                    <td>{wilcox.pValue < 0.05 ? '*' : ''}{wilcox.pValue < 0.01 ? '*' : ''}{wilcox.pValue < 0.001 ? '*' : ''}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div className="flex gap-4 text-[10px] text-text3 mb-6 bg-surface3/20 p-2 rounded max-w-fit">
+                <span>Sum of Positive Ranks (W⁺): <strong className="text-accent">{fmt(wilcox.posRankSum)}</strong></span>
+                <span>Sum of Negative Ranks (W⁻): <strong className="text-accent">{fmt(wilcox.negRankSum)}</strong></span>
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
+            <div className="h-[250px] bg-surface3/30 rounded p-2">
+              <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center">Parametric: Group Boxplots (Values)</p>
+              <VictoryChart
+                theme={VictoryTheme.material}
+                domainPadding={40}
+                padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
+              >
+                <VictoryAxis
+                  tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                  style={{ axis: { stroke: '#333' } }}
+                />
+                <VictoryAxis
+                  dependentAxis
+                  tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                  style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
+                />
+                <VictoryBoxPlot
+                  data={boxDataPaired}
+                  style={{
+                    min: { stroke: "#f87171", strokeWidth: 1.5 },
+                    max: { stroke: "#f87171", strokeWidth: 1.5 },
+                    q1: { fill: "#4f9cf9", fillOpacity: 0.4 },
+                    q3: { fill: "#4f9cf9", fillOpacity: 0.4 },
+                    median: { stroke: "#fff", strokeWidth: 2 }
+                  }}
+                />
+              </VictoryChart>
+            </div>
+
+            {useNonParam && !isNaN(wilcox.wStat) && (
+              <div className="h-[250px] bg-surface3/30 rounded p-2">
+                <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center">Non-Parametric: Boxplot of Differences (H₀: Median = 0)</p>
+                <VictoryChart
+                  theme={VictoryTheme.material}
+                  domainPadding={50}
+                  padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
+                >
+                  <VictoryAxis
+                    tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                    style={{ axis: { stroke: '#333' } }}
+                  />
+                  <VictoryAxis
+                    dependentAxis
+                    tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                    style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
+                  />
+                  <VictoryBoxPlot
+                    data={boxDataDiffs}
+                    style={{
+                      min: { stroke: "#f87171", strokeWidth: 1.5 },
+                      max: { stroke: "#f87171", strokeWidth: 1.5 },
+                      q1: { fill: "#a78bfa", fillOpacity: 0.4 },
+                      q3: { fill: "#a78bfa", fillOpacity: 0.4 },
+                      median: { stroke: "#fff", strokeWidth: 2 }
+                    }}
+                  />
+                  <VictoryLine
+                    y={() => 0}
+                    style={{ data: { stroke: '#ef4444', strokeWidth: 1.5, strokeDasharray: "4 4" } }}
+                    labels={["0"]}
+                    labelComponent={<VictoryLabel dx={10} style={{ fill: '#ef4444', fontSize: 9 }} />}
+                  />
+                </VictoryChart>
+              </div>
+            )}
           </div>
         </div>
       );
@@ -564,7 +1027,7 @@ export default function App() {
   };
 
   const runANOVA = () => {
-    const { dep, grp } = anovaParams;
+    const { dep, grp, posthoc, useNonParam, kwPosthoc } = anovaParams;
     
     // Group data
     const groups: { [key: string]: number[] } = {};
@@ -610,7 +1073,7 @@ export default function App() {
 
     // Post-Hoc Analysis
     let postHocResults: any[] = [];
-    if (anovaParams.posthoc !== 'none') {
+    if (posthoc !== 'none') {
       const numComps = (k * (k - 1)) / 2;
       for (let i = 0; i < groupKeys.length; i++) {
         for (let j = i + 1; j < groupKeys.length; j++) {
@@ -625,7 +1088,7 @@ export default function App() {
           let pVal = 1;
           let testName = "";
 
-          if (anovaParams.posthoc === 'tukey') {
+          if (posthoc === 'tukey') {
             testName = "Tukey HSD (approx)";
             if (msWithin > 0) {
               const t = diff / (Math.sqrt(msWithin * (1/n1 + 1/n2)));
@@ -634,7 +1097,7 @@ export default function App() {
             } else {
               pVal = diff === 0 ? 1 : 0;
             }
-          } else if (anovaParams.posthoc === 'bonferroni') {
+          } else if (posthoc === 'bonferroni') {
             testName = "Bonferroni";
             if (msWithin > 0) {
               const t = diff / (Math.sqrt(msWithin * (1/n1 + 1/n2)));
@@ -655,6 +1118,29 @@ export default function App() {
       }
     }
 
+    // Kruskal-Wallis Non-Parametric ANOVA Alternative
+    const kw = calcKruskalWallis(groups);
+    let kwPostHocResults: any[] = [];
+    if (useNonParam && kwPosthoc === 'bonferroni' && k > 2) {
+      const numComps = (k * (k - 1)) / 2;
+      for (let i = 0; i < groupKeys.length; i++) {
+        for (let j = i + 1; j < groupKeys.length; j++) {
+          const g1 = groupKeys[i];
+          const g2 = groupKeys[j];
+          const vals1 = groups[g1];
+          const vals2 = groups[g2];
+          const mwu = calcMannWhitneyU(vals1, vals2);
+          const adjP = Math.min(1.0, mwu.pValue * numComps);
+          kwPostHocResults.push({
+            comp: `${g1} vs ${g2}`,
+            uStat: mwu.uStat,
+            zStat: mwu.zStat,
+            p: adjP
+          });
+        }
+      }
+    }
+
     const anovaBoxPlotData = groupKeys.map(key => {
       const vals = groups[key];
       const quartiles = jStat.quartiles(vals);
@@ -662,15 +1148,60 @@ export default function App() {
         x: key,
         min: jStat.min(vals),
         q1: quartiles[0],
-        median: jStat.median(vals),
+        median: quartiles[1],
         q3: quartiles[2],
         max: jStat.max(vals)
       };
     });
 
+    const kwCombined: { val: number; gKey: string; rank: number }[] = [];
+    groupKeys.forEach(key => {
+      groups[key].forEach(v => {
+        kwCombined.push({ val: v, gKey: key, rank: 0 });
+      });
+    });
+    const kwN = kwCombined.length;
+    kwCombined.sort((a, b) => a.val - b.val);
+    let kwIdx = 0;
+    while (kwIdx < kwN) {
+      let j = kwIdx;
+      while (j < kwN - 1 && kwCombined[j + 1].val === kwCombined[kwIdx].val) {
+        j++;
+      }
+      const sumRanks = ((j + 1) * (j + 2)) / 2 - (kwIdx * (kwIdx + 1)) / 2;
+      const avgRank = sumRanks / (j - kwIdx + 1);
+      for (let k_comb = kwIdx; k_comb <= j; k_comb++) {
+        kwCombined[k_comb].rank = avgRank;
+      }
+      kwIdx = j + 1;
+    }
+
+    const kwBoxPlotData = groupKeys.map(key => {
+      const ranksOfGroup = kwCombined.filter(item => item.gKey === key).map(item => item.rank);
+      if (ranksOfGroup.length === 0) {
+        return { x: key, min: 0, q1: 0, median: 0, q3: 0, max: 0 };
+      }
+      const quartiles = jStat.quartiles(ranksOfGroup);
+      return {
+        x: key,
+        min: jStat.min(ranksOfGroup),
+        q1: quartiles[0],
+        median: quartiles[1],
+        q3: quartiles[2],
+        max: jStat.max(ranksOfGroup)
+      };
+    });
+
+    const kwMeanRanksData = groupKeys.map(key => ({
+      x: key,
+      y: kw.groupMeanRanks[key] || 0
+    }));
+
     const output = (
       <div className="output-block" key={Date.now()}>
-        <div className="output-title">One-Way ANOVA: {grid.cols[dep].name} by {grid.cols[grp].name}</div>
+        <div className="output-title">One-Way ANOVA & Kruskal-Wallis: {grid.cols[dep].name} by {grid.cols[grp].name}</div>
+        
+        <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Parametric: One-Way ANOVA</div>
         <table className="output-table mb-4">
           <thead>
             <tr><th>Source</th><th>SS</th><th>df</th><th>MS</th><th>F</th><th>p</th></tr>
@@ -703,32 +1234,124 @@ export default function App() {
           </div>
         )}
 
-        <div className="h-[300px] w-full mt-6 bg-surface3/30 rounded p-2">
-          <VictoryChart
-            theme={VictoryTheme.material}
-            domainPadding={40}
-            padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
-          >
-            <VictoryAxis
-              tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
-              style={{ axis: { stroke: '#333' } }}
-            />
-            <VictoryAxis
-              dependentAxis
-              tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
-              style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
-            />
-            <VictoryBoxPlot
-              data={anovaBoxPlotData}
-              style={{
-                min: { stroke: "#f87171", strokeWidth: 2 },
-                max: { stroke: "#f87171", strokeWidth: 2 },
-                q1: { fill: "#34d399", fillOpacity: 0.5 },
-                q3: { fill: "#34d399", fillOpacity: 0.5 },
-                median: { stroke: "#fff", strokeWidth: 2 }
-              }}
-            />
-          </VictoryChart>
+        {useNonParam && !isNaN(kw.hStat) && (
+          <div className="border-t border-border/30 pt-4 mt-6">
+            <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric: Kruskal-Wallis H Test</div>
+            <table className="output-table mb-4">
+              <thead>
+                <tr><th>Chi-Square (H)</th><th>df</th><th>p-value</th><th>Sig.</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>{fmt(kw.hStat)}</td>
+                  <td>{kw.df}</td>
+                  <td className={kw.pValue < 0.05 ? 'text-green font-bold' : ''}>{fmtP(kw.pValue)}</td>
+                  <td>{kw.pValue < 0.05 ? '*' : ''}{kw.pValue < 0.01 ? '*' : ''}{kw.pValue < 0.001 ? '*' : ''}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div className="text-[10px] text-text3 font-semibold mb-2">Group Ranks Summary</div>
+            <table className="output-table mb-4">
+              <thead>
+                <tr><th>Group</th><th>N</th><th>Rank Sum</th><th>Mean Rank</th></tr>
+              </thead>
+              <tbody>
+                {groupKeys.map(key => (
+                  <tr key={key}>
+                    <td className="font-bold">{key}</td>
+                    <td>{kw.groupNs[key]}</td>
+                    <td>{fmt(kw.groupRankSums[key], 1)}</td>
+                    <td>{fmt(kw.groupMeanRanks[key], 2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {kwPostHocResults.length > 0 && (
+              <div className="mb-6">
+                <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric Post-Hoc: Pairwise Mann-Whitney (Bonferroni)</div>
+                <table className="output-table">
+                  <thead>
+                    <tr><th>Comparison</th><th>U Statistic</th><th>Z Score</th><th>p-adj</th><th>Sig.</th></tr>
+                  </thead>
+                  <tbody>
+                    {kwPostHocResults.map((res, idx) => (
+                      <tr key={idx}>
+                        <td>{res.comp}</td>
+                        <td>{fmt(res.uStat, 1)}</td>
+                        <td>{fmt(res.zStat, 3)}</td>
+                        <td className={res.p < 0.05 ? 'text-green font-bold' : ''}>{fmtP(res.p)}</td>
+                        <td>{res.p < 0.05 ? '*' : ''}{res.p < 0.01 ? '*' : ''}{res.p < 0.001 ? '*' : ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
+          <div className="h-[300px] bg-surface3/30 rounded p-2">
+            <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center">Parametric: Group Boxplots (Values)</p>
+            <VictoryChart
+              theme={VictoryTheme.material}
+              domainPadding={40}
+              padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
+            >
+              <VictoryAxis
+                tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                style={{ axis: { stroke: '#333' } }}
+              />
+              <VictoryAxis
+                dependentAxis
+                tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
+              />
+              <VictoryBoxPlot
+                data={anovaBoxPlotData}
+                style={{
+                  min: { stroke: "#f87171", strokeWidth: 1.5 },
+                  max: { stroke: "#f87171", strokeWidth: 1.5 },
+                  q1: { fill: "#34d399", fillOpacity: 0.4 },
+                  q3: { fill: "#34d399", fillOpacity: 0.4 },
+                  median: { stroke: "#fff", strokeWidth: 2 }
+                }}
+              />
+            </VictoryChart>
+          </div>
+
+          {useNonParam && !isNaN(kw.hStat) && (
+            <div className="h-[300px] bg-surface3/30 rounded p-2">
+              <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center">Non-Parametric: Group Rank Boxplots</p>
+              <VictoryChart
+                theme={VictoryTheme.material}
+                domainPadding={40}
+                padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
+              >
+                <VictoryAxis
+                  tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                  style={{ axis: { stroke: '#333' } }}
+                />
+                <VictoryAxis
+                  dependentAxis
+                  tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
+                  style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
+                />
+                <VictoryBoxPlot
+                  data={kwBoxPlotData}
+                  style={{
+                    min: { stroke: "#f87171", strokeWidth: 1.5 },
+                    max: { stroke: "#f87171", strokeWidth: 1.5 },
+                    q1: { fill: "#818cf8", fillOpacity: 0.4 },
+                    q3: { fill: "#818cf8", fillOpacity: 0.4 },
+                    median: { stroke: "#fff", strokeWidth: 2 }
+                  }}
+                />
+              </VictoryChart>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -736,7 +1359,7 @@ export default function App() {
   };
 
   const runRegression = () => {
-    const { dep, indeps } = regParams;
+    const { dep, indeps, useNonParam } = regParams;
     if (indeps.length === 0) {
       showToast('Error', 'Select at least one predictor', 'error');
       return;
@@ -844,6 +1467,31 @@ export default function App() {
       y: parseNum(row[dep])
     })).filter(d => !isNaN(d.x) && !isNaN(d.y));
 
+    // Calculate Theil-Sen Robust Regression
+    let tsSlope = NaN;
+    let tsIntercept = NaN;
+    let tsLineData: { x: number; y: number }[] = [];
+    const tsEstimators: { name: string; slope: number; intercept: number }[] = [];
+
+    if (k === 1 && scatterData.length > 0) {
+      const xs = scatterData.map(d => d.x);
+      const ys = scatterData.map(d => d.y);
+      const tsResult = calcTheilSen(xs, ys);
+      tsSlope = tsResult.slope;
+      tsIntercept = tsResult.intercept;
+    } else {
+      // Calculate independent univariate Theil-Sen slopes for comparison
+      indeps.forEach(idx => {
+        const xs = validRows.map(row => parseNum(row[idx]));
+        const tsResult = calcTheilSen(xs, Y);
+        tsEstimators.push({
+          name: grid.cols[idx].name,
+          slope: tsResult.slope,
+          intercept: tsResult.intercept
+        });
+      });
+    }
+
     const coefData = indeps.map((idx, i) => ({
       name: grid.cols[idx].name,
       value: coef[i + 1]
@@ -870,23 +1518,106 @@ export default function App() {
         { x: maxX, y: yAtMaxX }
       ];
 
+      if (useNonParam && !isNaN(tsSlope)) {
+        tsLineData = [
+          { x: minX, y: tsIntercept + tsSlope * minX },
+          { x: maxX, y: tsIntercept + tsSlope * maxX }
+        ];
+      }
+
       const xRange = maxX - minX || 1;
-      const yMinVal = Math.min(minY, yAtMinX, yAtMaxX);
-      const yMaxVal = Math.max(maxY, yAtMinX, yAtMaxX);
+      const yMinVal = Math.min(minY, yAtMinX, yAtMaxX, useNonParam && !isNaN(tsSlope) ? tsIntercept + tsSlope * minX : minY);
+      const yMaxVal = Math.max(maxY, yAtMinX, yAtMaxX, useNonParam && !isNaN(tsSlope) ? tsIntercept + tsSlope * maxX : maxY);
       const yRange = yMaxVal - yMinVal || 1;
 
       xDomain = [minX - xRange * 0.05, maxX + xRange * 0.05];
       yDomain = [yMinVal - yRange * 0.05, yMaxVal + yRange * 0.05];
     }
 
+    const olsResids = indeps.length === 1 
+      ? scatterData.map(d => d.y - (coef[0] + coef[1] * d.x))
+      : Y.map((yVal, rIdx) => yVal - (coef[0] + indeps.reduce((sum, idx, i) => sum + coef[i+1] * parseNum(validRows[rIdx][idx]), 0)));
+
+    const qOls = jStat.quartiles(olsResids);
+    const regResidualsBoxPlotData = [
+      {
+        x: "OLS Residuals",
+        min: jStat.min(olsResids),
+        q1: qOls[0],
+        median: qOls[1],
+        q3: qOls[2],
+        max: jStat.max(olsResids)
+      }
+    ];
+
+    const calcResidStats = (resids: number[], name: string) => {
+      const rMin = jStat.min(resids);
+      const rMax = jStat.max(resids);
+      const rMean = jStat.mean(resids);
+      const rMedian = jStat.median(resids);
+      const rStdev = jStat.stdev(resids, true);
+      const rSkew = jStat.skewness(resids);
+      const rKurt = jStat.kurtosis(resids);
+      const rNorm = calcNormalityTests(resids);
+      return {
+        name,
+        min: rMin,
+        max: rMax,
+        mean: rMean,
+        median: rMedian,
+        stdev: rStdev,
+        skew: rSkew,
+        kurt: rKurt,
+        norm: rNorm
+      };
+    };
+
+    const olsResidStats = calcResidStats(olsResids, "OLS Residuals");
+    let tsResidStats: any = null;
+
+    if (useNonParam) {
+      if (indeps.length === 1 && !isNaN(tsSlope)) {
+        const tsResids = scatterData.map(d => d.y - (tsIntercept + tsSlope * d.x));
+        const qTs = jStat.quartiles(tsResids);
+        regResidualsBoxPlotData.push({
+          x: "Theil-Sen Residuals",
+          min: jStat.min(tsResids),
+          q1: qTs[0],
+          median: qTs[1],
+          q3: qTs[2],
+          max: jStat.max(tsResids)
+        });
+        tsResidStats = calcResidStats(tsResids, "Theil-Sen Residuals");
+      } else if (indeps.length > 1) {
+        const firstTS = tsEstimators[0];
+        if (firstTS) {
+          const firstXs = validRows.map(row => parseNum(row[indeps[0]]));
+          const tsResids = Y.map((yVal, rIdx) => yVal - (firstTS.intercept + firstTS.slope * firstXs[rIdx]));
+          const qTs = jStat.quartiles(tsResids);
+          regResidualsBoxPlotData.push({
+            x: `Theil-Sen Resids\n(${grid.cols[indeps[0]].name})`,
+            min: jStat.min(tsResids),
+            q1: qTs[0],
+            median: qTs[1],
+            q3: qTs[2],
+            max: jStat.max(tsResids)
+          });
+          tsResidStats = calcResidStats(tsResids, `Theil-Sen Residuals (${grid.cols[indeps[0]].name})`);
+        }
+      }
+    }
+
     const output = (
       <div className="output-block" key={Date.now()}>
-        <div className="output-title">Linear Regression: {grid.cols[dep].name}</div>
+        <div className="output-title">Linear Regression & Robust Estimators: {grid.cols[dep].name}</div>
         <div className="mb-4">
           <span className="text-[11px] text-text2 mr-4">R²: <span className="text-accent font-bold">{fmt(R2)}</span></span>
-          <span className="text-[11px] text-text2">Adj. R²: <span className="text-accent font-bold">{fmt(1 - (1 - R2) * (n - 1) / df)}</span></span>
+          <span className="text-[11px] text-text2 mr-4">Adj. R²: <span className="text-accent font-bold">{fmt(1 - (1 - R2) * (n - 1) / df)}</span></span>
+          <span className="text-[11px] text-text2">N: <span className="text-accent font-bold">{n}</span></span>
         </div>
-        <table className="output-table">
+
+        <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Parametric: Ordinary Least Squares (OLS)</div>
+        <table className="output-table mb-6">
           <thead>
             <tr><th>Variable</th><th>Coef (B)</th><th>Std. Error</th><th>t</th><th>p</th></tr>
           </thead>
@@ -910,48 +1641,97 @@ export default function App() {
           </tbody>
         </table>
 
-        {indeps.length === 1 ? (
-          <div className="h-[300px] w-full mt-6 bg-surface3/30 rounded p-2">
-            <VictoryChart
-              theme={VictoryTheme.material}
-              scale={{ x: "linear", y: "linear" }}
-              domain={xDomain && yDomain ? { x: xDomain, y: yDomain } : undefined}
-              padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
-            >
-              <VictoryAxis
-                label={grid.cols[indeps[0]].name}
-                style={{ 
-                  axis: { stroke: '#333' }, 
-                  axisLabel: { fill: '#888', fontSize: 10, padding: 30 },
-                  tickLabels: { fill: '#888', fontSize: 10 }
-                }}
-              />
-              <VictoryAxis
-                dependentAxis
-                label={grid.cols[dep].name}
-                style={{ 
-                  axis: { stroke: '#333' }, 
-                  axisLabel: { fill: '#888', fontSize: 10, padding: 35 },
-                  tickLabels: { fill: '#888', fontSize: 10 },
-                  grid: { stroke: '#222' }
-                }}
-              />
-              <VictoryScatter
-                data={scatterData}
-                style={{ data: { fill: '#4f9cf9' } }}
-              />
-              <VictoryLine
-                data={regLineData}
-                style={{ data: { stroke: '#f87171', strokeWidth: 2 } }}
-              />
-            </VictoryChart>
+        {useNonParam && (
+          <div className="border-t border-border/30 pt-4 mt-4">
+            <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric: Robust Theil-Sen Estimator</div>
+            {k === 1 ? (
+              <table className="output-table mb-6">
+                <thead>
+                  <tr><th>Variable</th><th>OLS Slope</th><th>Theil-Sen Robust Slope</th><th>OLS Intercept</th><th>Theil-Sen Robust Intercept</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td className="font-bold">{grid.cols[indeps[0]].name}</td>
+                    <td>{fmt(coef[1])}</td>
+                    <td className="text-green font-bold bg-green/5">{fmt(tsSlope)}</td>
+                    <td>{fmt(coef[0])}</td>
+                    <td>{fmt(tsIntercept)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            ) : (
+              <table className="output-table mb-6">
+                <thead>
+                  <tr><th>Predictor</th><th>OLS Slope (B)</th><th>Theil-Sen Univariate Robust Slope</th></tr>
+                </thead>
+                <tbody>
+                  {tsEstimators.map((est, i) => (
+                    <tr key={i}>
+                      <td className="font-bold">{est.name}</td>
+                      <td>{fmt(coef[i+1])}</td>
+                      <td className="text-green font-bold bg-green/5">{fmt(est.slope)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <p className="text-[10px] text-text3 italic mb-4">Note: Theil-Sen estimator represents the median slope between all pairs of data points, making it highly robust to outliers.</p>
           </div>
-        ) : (
-          <div className="h-[300px] w-full mt-6 bg-surface3/30 rounded p-2">
-            <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter">Coefficients Comparison</p>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
+          {indeps.length === 1 && (
+            <div className="h-[320px] bg-surface3/30 rounded p-2">
+              <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center">
+                Regression Line Comparison {useNonParam && <span className="text-green font-semibold">(Solid = Theil-Sen, Red = OLS)</span>}
+              </p>
+              <VictoryChart
+                theme={VictoryTheme.material}
+                scale={{ x: "linear", y: "linear" }}
+                domain={xDomain && yDomain ? { x: xDomain, y: yDomain } : undefined}
+                padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
+              >
+                <VictoryAxis
+                  label={grid.cols[indeps[0]].name}
+                  style={{ 
+                    axis: { stroke: '#333' }, 
+                    axisLabel: { fill: '#888', fontSize: 10, padding: 30 },
+                    tickLabels: { fill: '#888', fontSize: 10 }
+                  }}
+                />
+                <VictoryAxis
+                  dependentAxis
+                  label={grid.cols[dep].name}
+                  style={{ 
+                    axis: { stroke: '#333' }, 
+                    axisLabel: { fill: '#888', fontSize: 10, padding: 35 },
+                    tickLabels: { fill: '#888', fontSize: 10 },
+                    grid: { stroke: '#222' }
+                  }}
+                />
+                <VictoryScatter
+                  data={scatterData}
+                  style={{ data: { fill: '#4f9cf9', fillOpacity: 0.7, r: 3 } }}
+                />
+                <VictoryLine
+                  data={regLineData}
+                  style={{ data: { stroke: '#ef4444', strokeWidth: 1.5, strokeDasharray: "4 4" } }}
+                />
+                {useNonParam && tsLineData.length > 0 && (
+                  <VictoryLine
+                    data={tsLineData}
+                    style={{ data: { stroke: '#10b981', strokeWidth: 2 } }}
+                  />
+                )}
+              </VictoryChart>
+            </div>
+          )}
+
+          <div className={`h-[320px] bg-surface3/30 rounded p-2 ${indeps.length > 1 ? 'col-span-1 lg:col-span-2' : ''}`}>
+            <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center">Residuals Distribution (Model Accuracy Diagnostic Boxplots)</p>
             <VictoryChart
               theme={VictoryTheme.material}
-              domainPadding={20}
+              domainPadding={40}
               padding={{ top: 20, bottom: 50, left: 100, right: 20 }}
             >
               <VictoryAxis
@@ -963,34 +1743,142 @@ export default function App() {
                 tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
                 style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
               />
-              <VictoryBar
-                horizontal
-                data={coefData.map(d => ({ x: d.name, y: d.value }))}
-                style={{ data: { fill: '#4f9cf9', width: 20 } }}
-                labels={({ datum }) => `B: ${fmt(datum.y)}`}
-                labelComponent={<VictoryTooltip style={{ fontSize: 10 }} flyoutStyle={{ fill: '#1e1e1e', stroke: '#333' }} />}
+              <VictoryBoxPlot
+                data={regResidualsBoxPlotData}
+                style={{
+                  min: { stroke: "#f87171", strokeWidth: 1.5 },
+                  max: { stroke: "#f87171", strokeWidth: 1.5 },
+                  q1: { fill: "#4f9cf9", fillOpacity: 0.4 },
+                  q3: { fill: "#4f9cf9", fillOpacity: 0.4 },
+                  median: { stroke: "#fff", strokeWidth: 2 }
+                }}
               />
             </VictoryChart>
           </div>
-        )}
+        </div>
+
+        <div className="mt-6 border-t border-border/30 pt-4">
+          <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">
+            Studio e Analisi Statistica dei Residui
+          </div>
+          <table className="output-table">
+            <thead>
+              <tr>
+                <th className="text-left py-2 px-3 text-xs font-mono">Metrica</th>
+                <th className="text-left py-2 px-3 text-xs font-mono">Residui OLS</th>
+                {tsResidStats && <th className="text-left py-2 px-3 text-xs font-mono">Residui Theil-Sen</th>}
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="border-b border-border/10">
+                <td className="font-bold py-2 px-3 text-xs">Media (Mean)</td>
+                <td className="py-2 px-3 text-xs font-mono">{fmt(olsResidStats.mean)}</td>
+                {tsResidStats && <td className="py-2 px-3 text-xs font-mono">{fmt(tsResidStats.mean)}</td>}
+              </tr>
+              <tr className="border-b border-border/10">
+                <td className="font-bold py-2 px-3 text-xs">Mediana (Median)</td>
+                <td className="py-2 px-3 text-xs font-mono">{fmt(olsResidStats.median)}</td>
+                {tsResidStats && <td className="py-2 px-3 text-xs font-mono">{fmt(tsResidStats.median)}</td>}
+              </tr>
+              <tr className="border-b border-border/10">
+                <td className="font-bold py-2 px-3 text-xs">Deviazione Standard (Std Dev)</td>
+                <td className="py-2 px-3 text-xs font-mono">{fmt(olsResidStats.stdev)}</td>
+                {tsResidStats && <td className="py-2 px-3 text-xs font-mono">{fmt(tsResidStats.stdev)}</td>}
+              </tr>
+              <tr className="border-b border-border/10">
+                <td className="font-bold py-2 px-3 text-xs">Minimo / Massimo (Min / Max)</td>
+                <td className="py-2 px-3 text-xs font-mono">{fmt(olsResidStats.min)} / {fmt(olsResidStats.max)}</td>
+                {tsResidStats && <td className="py-2 px-3 text-xs font-mono">{fmt(tsResidStats.min)} / {fmt(tsResidStats.max)}</td>}
+              </tr>
+              <tr className="border-b border-border/10">
+                <td className="font-bold py-2 px-3 text-xs">Asimmetria (Skewness)</td>
+                <td className="py-2 px-3 text-xs font-mono">{fmt(olsResidStats.skew)}</td>
+                {tsResidStats && <td className="py-2 px-3 text-xs font-mono">{fmt(tsResidStats.skew)}</td>}
+              </tr>
+              <tr className="border-b border-border/10">
+                <td className="font-bold py-2 px-3 text-xs">Curtosi in Eccesso (Excess Kurtosis)</td>
+                <td className="py-2 px-3 text-xs font-mono">{fmt(olsResidStats.kurt)}</td>
+                {tsResidStats && <td className="py-2 px-3 text-xs font-mono">{fmt(tsResidStats.kurt)}</td>}
+              </tr>
+              <tr className="border-b border-border/10">
+                <td className="font-bold py-2 px-3 text-xs">Test Jarque-Bera (JB Stat, p-value)</td>
+                <td className="py-2 px-3 text-xs">
+                  <div className="flex flex-col gap-0.5 font-mono">
+                    <span>Stat: <b>{fmt(olsResidStats.norm.jbStat)}</b></span>
+                    <span>p-val: <b className={olsResidStats.norm.jbPValue < 0.05 ? 'text-red/90' : 'text-green'}>{fmt(olsResidStats.norm.jbPValue)}</b></span>
+                    <span className="text-[10px] text-text3 font-sans mt-0.5">
+                      {olsResidStats.norm.jbPValue > 0.05 ? '✓ Distr. Normale' : '✗ Distr. Non Normale'}
+                    </span>
+                  </div>
+                </td>
+                {tsResidStats && (
+                  <td className="py-2 px-3 text-xs">
+                    <div className="flex flex-col gap-0.5 font-mono">
+                      <span>Stat: <b>{fmt(tsResidStats.norm.jbStat)}</b></span>
+                      <span>p-val: <b className={tsResidStats.norm.jbPValue < 0.05 ? 'text-red/90' : 'text-green'}>{fmt(tsResidStats.norm.jbPValue)}</b></span>
+                      <span className="text-[10px] text-text3 font-sans mt-0.5">
+                        {tsResidStats.norm.jbPValue > 0.05 ? '✓ Distr. Normale' : '✗ Distr. Non Normale'}
+                      </span>
+                    </div>
+                  </td>
+                )}
+              </tr>
+              <tr>
+                <td className="font-bold py-2 px-3 text-xs">Test Kolmogorov-Smirnov (D Stat, p-value)</td>
+                <td className="py-2 px-3 text-xs">
+                  <div className="flex flex-col gap-0.5 font-mono">
+                    <span>Stat (D): <b>{fmt(olsResidStats.norm.ksStat)}</b></span>
+                    <span>p-val: <b className={olsResidStats.norm.ksPValue < 0.05 ? 'text-red/90' : 'text-green'}>{fmt(olsResidStats.norm.ksPValue)}</b></span>
+                    <span className="text-[10px] text-text3 font-sans mt-0.5">
+                      {olsResidStats.norm.ksPValue > 0.05 ? '✓ Distr. Normale' : '✗ Distr. Non Normale'}
+                    </span>
+                  </div>
+                </td>
+                {tsResidStats && (
+                  <td className="py-2 px-3 text-xs">
+                    <div className="flex flex-col gap-0.5 font-mono">
+                      <span>Stat (D): <b>{fmt(tsResidStats.norm.ksStat)}</b></span>
+                      <span>p-val: <b className={tsResidStats.norm.ksPValue < 0.05 ? 'text-red/90' : 'text-green'}>{fmt(tsResidStats.norm.ksPValue)}</b></span>
+                      <span className="text-[10px] text-text3 font-sans mt-0.5">
+                        {tsResidStats.norm.ksPValue > 0.05 ? '✓ Distr. Normale' : '✗ Distr. Non Normale'}
+                      </span>
+                    </div>
+                  </td>
+                )}
+              </tr>
+            </tbody>
+          </table>
+          <p className="text-[10px] text-text3 italic mt-3 leading-relaxed">
+            * Nota: L&#39;analisi diagnostica dei residui serve a verificare i presupposti fondamentali del modello classico di regressione lineare.
+            Residui distribuiti normalmente (con p-value &gt; 0,05 nei test di Jarque-Bera o Kolmogorov-Smirnov) e con media vicina a zero indicano che il modello cattura correttamente la struttura dei dati senza distorsioni sistematiche.
+          </p>
+        </div>
       </div>
     );
     setOutputs(prev => [...prev, output]);
   };
 
   const runCorrelation = () => {
-    const { vars, method } = corrParams;
+    const { vars, method, showSpearman, showKendall } = corrParams;
     if (vars.length < 2) {
       showToast('Error', 'Select at least 2 variables', 'error');
       return;
     }
 
-    const matrix: number[][] = [];
+    const matrixPearson: number[][] = [];
+    const matrixSpearman: number[][] = [];
+    const matrixKendall: number[][] = [];
+
     for (let i = 0; i < vars.length; i++) {
-      matrix[i] = [];
+      matrixPearson[i] = [];
+      matrixSpearman[i] = [];
+      matrixKendall[i] = [];
+
       for (let j = 0; j < vars.length; j++) {
         if (i === j) {
-          matrix[i][j] = 1;
+          matrixPearson[i][j] = 1;
+          matrixSpearman[i][j] = 1;
+          matrixKendall[i][j] = 1;
           continue;
         }
         
@@ -1002,33 +1890,80 @@ export default function App() {
           .filter(p => !isNaN(p[0]) && !isNaN(p[1]));
         
         if (pairs.length < 3) {
-          matrix[i][j] = NaN;
+          matrixPearson[i][j] = NaN;
+          matrixSpearman[i][j] = NaN;
+          matrixKendall[i][j] = NaN;
           continue;
         }
 
         const x = pairs.map(p => p[0]);
         const y = pairs.map(p => p[1]);
 
-        if (method === 'pearson') {
-          matrix[i][j] = jStat.corrcoeff(x, y);
-        } else {
-          // Spearman
-          const rankX = jStat.rank(x);
-          const rankY = jStat.rank(y);
-          matrix[i][j] = jStat.corrcoeff(rankX, rankY);
-        }
+        // Pearson
+        matrixPearson[i][j] = jStat.corrcoeff(x, y);
+
+        // Spearman
+        const rankX = jStat.rank(x);
+        const rankY = jStat.rank(y);
+        matrixSpearman[i][j] = jStat.corrcoeff(rankX, rankY);
+
+        // Kendall's Tau
+        matrixKendall[i][j] = calcKendallTau(x, y);
       }
     }
 
-    const corrChartData = vars.slice(1).map((vIdx, i) => ({
+    const corrChartDataPearson = vars.slice(1).map((vIdx, i) => ({
       name: grid.cols[vIdx].name,
-      value: matrix[0][i + 1]
+      value: matrixPearson[0][i + 1]
     }));
+
+    const corrChartDataSpearman = vars.slice(1).map((vIdx, i) => ({
+      name: grid.cols[vIdx].name,
+      value: matrixSpearman[0][i + 1]
+    }));
+
+    const corrChartDataKendall = vars.slice(1).map((vIdx, i) => ({
+      name: grid.cols[vIdx].name,
+      value: matrixKendall[0][i + 1]
+    }));
+
+    const corrBoxPlotData = vars.map(idx => {
+      const vals = grid.rows.map(row => parseNum(row[idx])).filter(v => !isNaN(v));
+      const quartiles = jStat.quartiles(vals);
+      return {
+        x: grid.cols[idx].name,
+        min: jStat.min(vals),
+        q1: quartiles[0],
+        median: quartiles[1],
+        q3: quartiles[2],
+        max: jStat.max(vals)
+      };
+    });
+
+    // Scatter and Rank Scatter data for 2-variable case
+    const rawScatterData = grid.rows.map(r => ({
+      x: parseNum(r[vars[0]]),
+      y: parseNum(r[vars[1]])
+    })).filter(p => !isNaN(p.x) && !isNaN(p.y));
+
+    let rankScatterData: { x: number; y: number }[] = [];
+    if (vars.length === 2 && rawScatterData.length >= 3) {
+      const xs = rawScatterData.map(d => d.x);
+      const ys = rawScatterData.map(d => d.y);
+      const rx = jStat.rank(xs);
+      const ry = jStat.rank(ys);
+      rankScatterData = rx.map((val, idx) => ({
+        x: val,
+        y: ry[idx]
+      }));
+    }
 
     const output = (
       <div className="output-block" key={Date.now()}>
-        <div className="output-title">{method.charAt(0).toUpperCase() + method.slice(1)} Correlation Matrix</div>
-        <table className="output-table">
+        <div className="output-title">Correlation Analysis Suite</div>
+
+        <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Parametric: Pearson Correlation Matrix</div>
+        <table className="output-table mb-6">
           <thead>
             <tr><th></th>{vars.map(v => <th key={v}>{grid.cols[v].name}</th>)}</tr>
           </thead>
@@ -1037,8 +1972,8 @@ export default function App() {
               <tr key={v1}>
                 <td className="font-bold">{grid.cols[v1].name}</td>
                 {vars.map((v2, j) => (
-                  <td key={v2} className={Math.abs(matrix[i][j]) > 0.5 && i !== j ? 'text-accent font-bold' : ''}>
-                    {fmt(matrix[i][j], 3)}
+                  <td key={v2} className={Math.abs(matrixPearson[i][j]) > 0.5 && i !== j ? 'text-accent font-bold' : ''}>
+                    {isNaN(matrixPearson[i][j]) ? 'N/A' : fmt(matrixPearson[i][j], 3)}
                   </td>
                 ))}
               </tr>
@@ -1046,43 +1981,126 @@ export default function App() {
           </tbody>
         </table>
 
+        {showSpearman && (
+          <div className="border-t border-border/30 pt-4 mt-4">
+            <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric: Spearman Rank Correlation Matrix (ρ)</div>
+            <table className="output-table mb-6">
+              <thead>
+                <tr><th></th>{vars.map(v => <th key={v}>{grid.cols[v].name}</th>)}</tr>
+              </thead>
+              <tbody>
+                {vars.map((v1, i) => (
+                  <tr key={v1}>
+                    <td className="font-bold">{grid.cols[v1].name}</td>
+                    {vars.map((v2, j) => (
+                      <td key={v2} className={Math.abs(matrixSpearman[i][j]) > 0.5 && i !== j ? 'text-green font-bold' : ''}>
+                        {isNaN(matrixSpearman[i][j]) ? 'N/A' : fmt(matrixSpearman[i][j], 3)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {showKendall && (
+          <div className="border-t border-border/30 pt-4 mt-4">
+            <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric: Kendall's Tau-b Correlation Matrix (τ)</div>
+            <table className="output-table mb-6">
+              <thead>
+                <tr><th></th>{vars.map(v => <th key={v}>{grid.cols[v].name}</th>)}</tr>
+              </thead>
+              <tbody>
+                {vars.map((v1, i) => (
+                  <tr key={v1}>
+                    <td className="font-bold">{grid.cols[v1].name}</td>
+                    {vars.map((v2, j) => (
+                      <td key={v2} className={Math.abs(matrixKendall[i][j]) > 0.5 && i !== j ? 'text-purple-400 font-bold' : ''}>
+                        {isNaN(matrixKendall[i][j]) ? 'N/A' : fmt(matrixKendall[i][j], 3)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {vars.length === 2 ? (
-          <div className="h-[300px] w-full mt-6 bg-surface3/30 rounded p-2">
-            <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter">Scatter Plot: {grid.cols[vars[0]].name} vs {grid.cols[vars[1]].name}</p>
-            <VictoryChart
-              theme={VictoryTheme.material}
-              padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
-            >
-              <VictoryAxis
-                label={grid.cols[vars[0]].name}
-                style={{ 
-                  axis: { stroke: '#333' }, 
-                  axisLabel: { fill: '#888', fontSize: 10, padding: 30 },
-                  tickLabels: { fill: '#888', fontSize: 10 }
-                }}
-              />
-              <VictoryAxis
-                dependentAxis
-                label={grid.cols[vars[1]].name}
-                style={{ 
-                  axis: { stroke: '#333' }, 
-                  axisLabel: { fill: '#888', fontSize: 10, padding: 35 },
-                  tickLabels: { fill: '#888', fontSize: 10 },
-                  grid: { stroke: '#222' }
-                }}
-              />
-              <VictoryScatter
-                data={grid.rows.map(r => ({ x: parseNum(r[vars[0]]), y: parseNum(r[vars[1]]) })).filter(p => !isNaN(p.x) && !isNaN(p.y))}
-                style={{ data: { fill: '#fb923c' } }}
-              />
-            </VictoryChart>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
+            <div className="h-[280px] bg-surface3/30 rounded p-2">
+              <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center">Parametric: Raw Scatter Plot</p>
+              <VictoryChart
+                theme={VictoryTheme.material}
+                padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
+              >
+                <VictoryAxis
+                  label={grid.cols[vars[0]].name}
+                  style={{ 
+                    axis: { stroke: '#333' }, 
+                    axisLabel: { fill: '#888', fontSize: 10, padding: 30 },
+                    tickLabels: { fill: '#888', fontSize: 10 }
+                  }}
+                />
+                <VictoryAxis
+                  dependentAxis
+                  label={grid.cols[vars[1]].name}
+                  style={{ 
+                    axis: { stroke: '#333' }, 
+                    axisLabel: { fill: '#888', fontSize: 10, padding: 35 },
+                    tickLabels: { fill: '#888', fontSize: 10 },
+                    grid: { stroke: '#222' }
+                  }}
+                />
+                <VictoryScatter
+                  data={rawScatterData}
+                  style={{ data: { fill: '#fb923c', r: 3 } }}
+                />
+              </VictoryChart>
+            </div>
+
+            {showSpearman && rankScatterData.length > 0 && (
+              <div className="h-[280px] bg-surface3/30 rounded p-2">
+                <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center text-green">Non-Parametric: Spearman Rank Space Scatter Plot</p>
+                <VictoryChart
+                  theme={VictoryTheme.material}
+                  padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
+                >
+                  <VictoryAxis
+                    label={`Rank: ${grid.cols[vars[0]].name}`}
+                    style={{ 
+                      axis: { stroke: '#333' }, 
+                      axisLabel: { fill: '#888', fontSize: 10, padding: 30 },
+                      tickLabels: { fill: '#888', fontSize: 10 }
+                    }}
+                  />
+                  <VictoryAxis
+                    dependentAxis
+                    label={`Rank: ${grid.cols[vars[1]].name}`}
+                    style={{ 
+                      axis: { stroke: '#333' }, 
+                      axisLabel: { fill: '#888', fontSize: 10, padding: 35 },
+                      tickLabels: { fill: '#888', fontSize: 10 },
+                      grid: { stroke: '#222' }
+                    }}
+                  />
+                  <VictoryScatter
+                    data={rankScatterData}
+                    style={{ data: { fill: '#34d399', r: 3 } }}
+                  />
+                </VictoryChart>
+              </div>
+            )}
           </div>
         ) : (
-          <div className="h-[300px] w-full mt-6 bg-surface3/30 rounded p-2">
-            <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter">Correlations with {grid.cols[vars[0]].name}</p>
+          <div className="h-[340px] w-full mt-6 bg-surface3/30 rounded p-2">
+            <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center">
+              Selected Variables Distribution (Boxplots)
+            </p>
             <VictoryChart
               theme={VictoryTheme.material}
-              domainPadding={20}
+              domainPadding={40}
               padding={{ top: 20, bottom: 50, left: 100, right: 20 }}
             >
               <VictoryAxis
@@ -1091,25 +2109,246 @@ export default function App() {
               />
               <VictoryAxis
                 dependentAxis
-                domain={[-1, 1]}
                 tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 10 }} />}
                 style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
               />
-              <VictoryBar
-                horizontal
-                data={corrChartData.map(d => ({ x: d.name, y: d.value }))}
-                style={{ 
-                  data: { 
-                    fill: ({ datum }) => datum.y > 0 ? '#34d399' : '#f87171',
-                    width: 20 
-                  } 
+              <VictoryBoxPlot
+                data={corrBoxPlotData}
+                style={{
+                  min: { stroke: "#f87171", strokeWidth: 1.5 },
+                  max: { stroke: "#f87171", strokeWidth: 1.5 },
+                  q1: { fill: "#fb923c", fillOpacity: 0.4 },
+                  q3: { fill: "#fb923c", fillOpacity: 0.4 },
+                  median: { stroke: "#fff", strokeWidth: 2 }
                 }}
-                labels={({ datum }) => `r: ${fmt(datum.y, 3)}`}
-                labelComponent={<VictoryTooltip style={{ fontSize: 10 }} flyoutStyle={{ fill: '#1e1e1e', stroke: '#333' }} />}
               />
             </VictoryChart>
           </div>
         )}
+      </div>
+    );
+    setOutputs(prev => [...prev, output]);
+  };
+
+  const runChiSquare = () => {
+    const { row1col1, row1col2, row2col1, row2col2, row1Label, row2Label, col1Label, col2Label, runFisherExact } = chisqParams;
+
+    if (row1col1 < 0 || row1col2 < 0 || row2col1 < 0 || row2col2 < 0) {
+      showToast('Error', 'Frequencies must be non-negative', 'error');
+      return;
+    }
+
+    const o11 = row1col1;
+    const o12 = row1col2;
+    const o21 = row2col1;
+    const o22 = row2col2;
+
+    const r1 = o11 + o12;
+    const r2 = o21 + o22;
+    const c1 = o11 + o21;
+    const c2 = o12 + o22;
+    const n = r1 + r2;
+
+    if (n === 0) {
+      showToast('Error', 'Grand total cannot be zero', 'error');
+      return;
+    }
+
+    const e11 = (r1 * c1) / n;
+    const e12 = (r1 * c2) / n;
+    const e21 = (r2 * c1) / n;
+    const e22 = (r2 * c2) / n;
+
+    if (e11 === 0 || e12 === 0 || e21 === 0 || e22 === 0) {
+      showToast('Error', 'Expected frequencies cannot be zero. Please check your contingency table data.', 'error');
+      return;
+    }
+
+    // Pearson Chi-Square
+    const chi2 = 
+      Math.pow(o11 - e11, 2) / e11 +
+      Math.pow(o12 - e12, 2) / e12 +
+      Math.pow(o21 - e21, 2) / e21 +
+      Math.pow(o22 - e22, 2) / e22;
+
+    // Yates Continuity Correction
+    const chi2Yates = 
+      Math.pow(Math.max(0, Math.abs(o11 - e11) - 0.5), 2) / e11 +
+      Math.pow(Math.max(0, Math.abs(o12 - e12) - 0.5), 2) / e12 +
+      Math.pow(Math.max(0, Math.abs(o21 - e21) - 0.5), 2) / e21 +
+      Math.pow(Math.max(0, Math.abs(o22 - e22) - 0.5), 2) / e22;
+
+    const df = 1;
+    let pValue = 1;
+    let pValueYates = 1;
+    try {
+      pValue = 1 - jStat.chisquare.cdf(chi2, df);
+      pValueYates = 1 - jStat.chisquare.cdf(chi2Yates, df);
+    } catch (e) {
+      console.error(e);
+    }
+
+    const pValueFisher = runFisherExact ? calcFisherExact(o11, o12, o21, o22) : NaN;
+
+    const phi = Math.sqrt(chi2 / n);
+    let interpretation = 'Negligible';
+    if (phi >= 0.5) interpretation = 'Strong association';
+    else if (phi >= 0.3) interpretation = 'Moderate association';
+    else if (phi >= 0.1) interpretation = 'Weak association';
+
+    const minExpected = Math.min(e11, e12, e21, e22);
+    const showCochranWarning = minExpected < 5;
+
+    const obsValues = [o11, o12, o21, o22];
+    const expValues = [e11, e12, e21, e22];
+    const qObs = jStat.quartiles(obsValues);
+    const qExp = jStat.quartiles(expValues);
+    const boxDataChisq = [
+      {
+        x: "Observed",
+        min: jStat.min(obsValues),
+        q1: qObs[0],
+        median: qObs[1],
+        q3: qObs[2],
+        max: jStat.max(obsValues)
+      },
+      {
+        x: "Expected",
+        min: jStat.min(expValues),
+        q1: qExp[0],
+        median: qExp[1],
+        q3: qExp[2],
+        max: jStat.max(expValues)
+      }
+    ];
+
+    const chartDataObs = [
+      { x: `${row1Label}\n(${col1Label})`, y: o11 },
+      { x: `${row1Label}\n(${col2Label})`, y: o12 },
+      { x: `${row2Label}\n(${col1Label})`, y: o21 },
+      { x: `${row2Label}\n(${col2Label})`, y: o22 }
+    ];
+
+    const chartDataExp = [
+      { x: `${row1Label}\n(${col1Label})`, y: e11 },
+      { x: `${row1Label}\n(${col2Label})`, y: e12 },
+      { x: `${row2Label}\n(${col1Label})`, y: e21 },
+      { x: `${row2Label}\n(${col2Label})`, y: e22 }
+    ];
+
+    const output = (
+      <div className="output-block" key={Date.now()}>
+        <div className="output-title">Chi-Square (χ²) Test of Independence</div>
+        
+        <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Contingency Table: Observed vs (Expected)</div>
+        <table className="output-table mb-6">
+          <thead>
+            <tr>
+              <th></th>
+              <th>{col1Label}</th>
+              <th>{col2Label}</th>
+              <th className="font-bold">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="font-bold">{row1Label}</td>
+              <td>{o11} ({fmt(e11, 2)})</td>
+              <td>{o12} ({fmt(e12, 2)})</td>
+              <td className="font-bold">{r1}</td>
+            </tr>
+            <tr>
+              <td className="font-bold">{row2Label}</td>
+              <td>{o21} ({fmt(e21, 2)})</td>
+              <td>{o22} ({fmt(e22, 2)})</td>
+              <td className="font-bold">{r2}</td>
+            </tr>
+            <tr className="border-t border-border font-bold">
+              <td>Total</td>
+              <td>{c1}</td>
+              <td>{c2}</td>
+              <td>{n}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Test Statistics (df = 1)</div>
+        <table className="output-table">
+          <thead>
+            <tr>
+              <th>Test Type</th>
+              <th>Value (χ²)</th>
+              <th>p-value</th>
+              <th>Sig.</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Pearson Chi-Square</td>
+              <td>{fmt(chi2, 4)}</td>
+              <td className={pValue < 0.05 ? 'text-green font-bold' : ''}>{fmtP(pValue)}</td>
+              <td>{pValue < 0.05 ? '*' : ''}{pValue < 0.01 ? '*' : ''}{pValue < 0.001 ? '*' : ''}</td>
+            </tr>
+            <tr>
+              <td>Yates' Continuity Correction</td>
+              <td>{fmt(chi2Yates, 4)}</td>
+              <td className={pValueYates < 0.05 ? 'text-green font-bold' : ''}>{fmtP(pValueYates)}</td>
+              <td>{pValueYates < 0.05 ? '*' : ''}{pValueYates < 0.01 ? '*' : ''}{pValueYates < 0.001 ? '*' : ''}</td>
+            </tr>
+            {runFisherExact && !isNaN(pValueFisher) && (
+              <tr>
+                <td className="font-semibold text-green">Fisher's Exact Test (Non-Parametric)</td>
+                <td>N/A (Exact Probability)</td>
+                <td className={pValueFisher < 0.05 ? 'text-green font-bold bg-green/5' : ''}>{fmtP(pValueFisher)}</td>
+                <td>{pValueFisher < 0.05 ? '*' : ''}{pValueFisher < 0.01 ? '*' : ''}{pValueFisher < 0.001 ? '*' : ''}</td>
+              </tr>
+            )}
+            <tr className="border-t border-border font-bold">
+              <td>Cramér's V (Phi Coefficient)</td>
+              <td>{fmt(phi, 4)}</td>
+              <td colSpan={2} className="text-accent">{interpretation}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {showCochranWarning && (
+          <div className="mt-4 p-2 bg-yellow/10 border border-yellow/20 rounded flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-yellow shrink-0 mt-0.5" />
+            <div className="text-[10px] text-yellow leading-normal">
+              <strong>Warning (Cochran's Rule):</strong> One or more expected frequencies is less than 5 (Min expected: {fmt(minExpected, 2)}).
+              The standard Chi-Square test may be inaccurate. Yates' Continuity Correction is strongly recommended.
+            </div>
+          </div>
+        )}
+
+        <div className="h-[300px] w-full mt-6 bg-surface3/30 rounded p-2">
+          <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center">Observed vs. Expected Distributions (Boxplots)</p>
+          <VictoryChart
+            theme={VictoryTheme.material}
+            domainPadding={{ x: 50 }}
+            padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
+          >
+            <VictoryAxis
+              tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 9 }} />}
+              style={{ axis: { stroke: '#333' } }}
+            />
+            <VictoryAxis
+              dependentAxis
+              tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 9 }} />}
+              style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
+            />
+            <VictoryBoxPlot
+              data={boxDataChisq}
+              style={{
+                min: { stroke: "#f87171", strokeWidth: 1.5 },
+                max: { stroke: "#f87171", strokeWidth: 1.5 },
+                q1: { fill: "#34d399", fillOpacity: 0.4 },
+                q3: { fill: "#34d399", fillOpacity: 0.4 },
+                median: { stroke: "#fff", strokeWidth: 2 }
+              }}
+            />
+          </VictoryChart>
+        </div>
       </div>
     );
     setOutputs(prev => [...prev, output]);
@@ -1242,7 +2481,8 @@ export default function App() {
                   { id: 'ttest', label: 'T-Test' },
                   { id: 'anova', label: 'ANOVA' },
                   { id: 'regression', label: 'Regression' },
-                  { id: 'correlation', label: 'Correlation' }
+                  { id: 'correlation', label: 'Correlation' },
+                  { id: 'chisquare', label: 'Chi-Square (χ²)' }
                 ].map(a => (
                   <button 
                     key={a.id}
@@ -1362,6 +2602,31 @@ export default function App() {
                         <option value="bonferroni">Bonferroni</option>
                       </select>
                     </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">Non-Parametric</label>
+                      <label className="flex items-center gap-1.5 text-[11px] text-text2 hover:text-text cursor-pointer h-full pt-1">
+                        <input 
+                          type="checkbox" 
+                          className="accent-accent" 
+                          checked={anovaParams.useNonParam}
+                          onChange={(e) => setAnovaParams(p => ({ ...p, useNonParam: e.target.checked }))}
+                        />
+                        Kruskal-Wallis H
+                      </label>
+                    </div>
+                    {anovaParams.useNonParam && (
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">K-W Post-Hoc</label>
+                        <select 
+                          className="bg-surface3 border border-border2 text-text text-[11px] p-1.5 rounded min-w-[120px]"
+                          value={anovaParams.kwPosthoc}
+                          onChange={(e) => setAnovaParams(p => ({ ...p, kwPosthoc: e.target.value as any }))}
+                        >
+                          <option value="none">None</option>
+                          <option value="bonferroni">Bonferroni</option>
+                        </select>
+                      </div>
+                    )}
                   </>
                 )}
 
@@ -1398,6 +2663,18 @@ export default function App() {
                         ))}
                       </div>
                     </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">Non-Parametric</label>
+                      <label className="flex items-center gap-1.5 text-[11px] text-text2 hover:text-text cursor-pointer h-full pt-1">
+                        <input 
+                          type="checkbox" 
+                          className="accent-accent" 
+                          checked={regParams.useNonParam}
+                          onChange={(e) => setRegParams(p => ({ ...p, useNonParam: e.target.checked }))}
+                        />
+                        Theil-Sen Robust Line
+                      </label>
+                    </div>
                   </>
                 )}
 
@@ -1425,7 +2702,7 @@ export default function App() {
                       </div>
                     </div>
                     <div className="flex flex-col gap-1">
-                      <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">Method</label>
+                      <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">Primary Method</label>
                       <select 
                         className="bg-surface3 border border-border2 text-text text-[11px] p-1.5 rounded min-w-[120px]"
                         value={corrParams.method}
@@ -1435,7 +2712,187 @@ export default function App() {
                         <option value="spearman">Spearman</option>
                       </select>
                     </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">Non-Parametric</label>
+                      <div className="flex flex-col gap-1 pt-0.5">
+                        <label className="flex items-center gap-1.5 text-[11px] text-text2 hover:text-text cursor-pointer">
+                          <input 
+                            type="checkbox" 
+                            className="accent-accent" 
+                            checked={corrParams.showSpearman}
+                            onChange={(e) => setCorrParams(p => ({ ...p, showSpearman: e.target.checked }))}
+                          />
+                          Spearman (ρ)
+                        </label>
+                        <label className="flex items-center gap-1.5 text-[11px] text-text2 hover:text-text cursor-pointer">
+                          <input 
+                            type="checkbox" 
+                            className="accent-accent" 
+                            checked={corrParams.showKendall}
+                            onChange={(e) => setCorrParams(p => ({ ...p, showKendall: e.target.checked }))}
+                          />
+                          Kendall's Tau (τ)
+                        </label>
+                      </div>
+                    </div>
                   </>
+                )}
+
+                {activeAnalysis === 'chisquare' && (
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">
+                      Contingency Table (2x2)
+                    </label>
+                    <div className="bg-surface3 border border-border2 rounded p-3">
+                      <table className="text-[11px] text-text2">
+                        <thead>
+                          <tr>
+                            <th className="p-1"></th>
+                            <th className="p-1 text-center font-mono text-[9px] uppercase tracking-wider text-text3">
+                              Col 1 (Label)
+                            </th>
+                            <th className="p-1 text-center font-mono text-[9px] uppercase tracking-wider text-text3">
+                              Col 2 (Label)
+                            </th>
+                          </tr>
+                          <tr>
+                            <th className="p-1"></th>
+                            <th className="p-1">
+                              <input
+                                type="text"
+                                className="bg-surface border border-border2 text-text text-[11px] p-1 rounded text-center w-28 font-semibold"
+                                value={chisqParams.col1Label}
+                                onChange={(e) => setChisqParams(p => ({ ...p, col1Label: e.target.value }))}
+                              />
+                            </th>
+                            <th className="p-1">
+                              <input
+                                type="text"
+                                className="bg-surface border border-border2 text-text text-[11px] p-1 rounded text-center w-28 font-semibold"
+                                value={chisqParams.col2Label}
+                                onChange={(e) => setChisqParams(p => ({ ...p, col2Label: e.target.value }))}
+                              />
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td className="p-1">
+                              <input
+                                type="text"
+                                className="bg-surface border border-border2 text-text text-[11px] p-1 rounded font-semibold w-28"
+                                value={chisqParams.row1Label}
+                                onChange={(e) => setChisqParams(p => ({ ...p, row1Label: e.target.value }))}
+                              />
+                            </td>
+                            <td className="p-1">
+                              <input
+                                type="number"
+                                min="0"
+                                className="bg-surface border border-border2 text-text text-[11px] p-1 rounded text-center w-28"
+                                value={chisqParams.row1col1}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value);
+                                  setChisqParams(p => ({ ...p, row1col1: isNaN(val) ? 0 : val }));
+                                }}
+                              />
+                            </td>
+                            <td className="p-1">
+                              <input
+                                type="number"
+                                min="0"
+                                className="bg-surface border border-border2 text-text text-[11px] p-1 rounded text-center w-28"
+                                value={chisqParams.row1col2}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value);
+                                  setChisqParams(p => ({ ...p, row1col2: isNaN(val) ? 0 : val }));
+                                }}
+                              />
+                            </td>
+                          </tr>
+                          <tr>
+                            <td className="p-1">
+                              <input
+                                type="text"
+                                className="bg-surface border border-border2 text-text text-[11px] p-1 rounded font-semibold w-28"
+                                value={chisqParams.row2Label}
+                                onChange={(e) => setChisqParams(p => ({ ...p, row2Label: e.target.value }))}
+                              />
+                            </td>
+                            <td className="p-1">
+                              <input
+                                type="number"
+                                min="0"
+                                className="bg-surface border border-border2 text-text text-[11px] p-1 rounded text-center w-28"
+                                value={chisqParams.row2col1}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value);
+                                  setChisqParams(p => ({ ...p, row2col1: isNaN(val) ? 0 : val }));
+                                }}
+                              />
+                            </td>
+                            <td className="p-1">
+                              <input
+                                type="number"
+                                min="0"
+                                className="bg-surface border border-border2 text-text text-[11px] p-1 rounded text-center w-28"
+                                value={chisqParams.row2col2}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value);
+                                  setChisqParams(p => ({ ...p, row2col2: isNaN(val) ? 0 : val }));
+                                }}
+                              />
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <div className="flex items-center justify-between gap-1.5 mt-3">
+                        <label className="flex items-center gap-1.5 text-[11px] text-text2 hover:text-text cursor-pointer">
+                          <input 
+                            type="checkbox" 
+                            className="accent-accent" 
+                            checked={chisqParams.runFisherExact}
+                            onChange={(e) => setChisqParams(p => ({ ...p, runFisherExact: e.target.checked }))}
+                          />
+                          Run Fisher's Exact Test
+                        </label>
+                        <div className="flex gap-1.5">
+                          <button 
+                            className="text-[10px] bg-surface hover:bg-border px-2 py-0.5 rounded font-mono text-text3 hover:text-text border border-border cursor-pointer"
+                            onClick={() => setChisqParams(p => ({
+                              ...p,
+                              row1col1: 30,
+                              row1col2: 20,
+                              row2col1: 15,
+                              row2col2: 35,
+                              row1Label: 'Treatment Group',
+                              row2Label: 'Control Group',
+                              col1Label: 'Improved',
+                              col2Label: 'No Change'
+                            }))}
+                          >
+                            Preset 1: Trial
+                          </button>
+                          <button 
+                            className="text-[10px] bg-surface hover:bg-border px-2 py-0.5 rounded font-mono text-text3 hover:text-text border border-border cursor-pointer"
+                            onClick={() => setChisqParams(p => ({
+                              ...p,
+                              row1col1: 120,
+                              row1col2: 880,
+                              row2col1: 90,
+                              row2col2: 910,
+                              row1Label: 'Variant A',
+                              row2Label: 'Variant B',
+                              col1Label: 'Converted',
+                              col2Label: 'Bounced'
+                            }))}
+                          >
+                            Preset 2: A/B Test
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 )}
 
                 <button className="run-btn h-9 self-end" onClick={runAnalysis}>
