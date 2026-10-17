@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   BarChart3, 
   Settings, 
@@ -24,6 +24,15 @@ import { anovaTables } from './stats/anova';
 import { regressionTables } from './stats/regression';
 import { correlationTables } from './stats/correlation';
 import { chiSquareTables } from './stats/chisquare';
+import { ContingencyAnalysis, type ContingencyHandle } from './analyses/ContingencyAnalysis';
+import { SampleSizeAnalysis, type SampleSizeHandle } from './analyses/SampleSizeAnalysis';
+import { DistributionFitAnalysis, type DistributionFitHandle } from './analyses/DistributionFitAnalysis';
+import { FactorialAnovaAnalysis, type FactorialAnovaHandle } from './analyses/FactorialAnovaAnalysis';
+import { LogisticAnalysis, type LogisticHandle } from './analyses/LogisticAnalysis';
+import { TimeSeriesAnalysis, type TimeSeriesHandle } from './analyses/TimeSeriesAnalysis';
+import { SurvivalAnalysis, type SurvivalHandle } from './analyses/SurvivalAnalysis';
+import { CoxAnalysis, type CoxHandle } from './analyses/CoxAnalysis';
+import { WizardAnalysis, type WizardHandle } from './analyses/WizardAnalysis';
 import {
   anovaReport,
   chiSquareReport,
@@ -56,6 +65,7 @@ import {
   NormalityResult
 } from './statsHelpers';
 import { buildHistogram, pairedValues, parseNum, pooledTTest, welchTTest } from './stats/core';
+import { csvToTable, parseCsv, toCsv, trimEmptyRows } from './csv';
 
 // --- Types ---
 type ColType = 'num' | 'int' | 'dec' | 'str' | 'alp' | 'chr' | 'bol' | 'dat';
@@ -112,7 +122,7 @@ const validateValue = (val: string, type: ColType) => {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'data' | 'analysis' | 'settings'>('data');
-  const [activeAnalysis, setActiveAnalysis] = useState<string>('descriptive');
+  const [activeAnalysis, setActiveAnalysis] = useState<string>('wizard');
   const [grid, setGrid] = useState<GridData>({
     cols: [
       { name: 'Score_Pre', type: 'num' },
@@ -186,6 +196,45 @@ export default function App() {
     });
   };
 
+  const csvInputRef = useRef<HTMLInputElement>(null);
+
+  const importCsv = async (file: File) => {
+    try {
+      const text = await file.text();
+      const table = csvToTable(parseCsv(text));
+      if (table.names.length === 0 || table.rows.length === 0) {
+        showToast('Import', 'The file has no data rows', 'warn');
+        return;
+      }
+      setGrid({
+        cols: table.names.map((name, index) => ({ name, type: table.types[index] as ColType })),
+        rows: table.rows.map(row => [...row]),
+      });
+      setActiveTab('data');
+      showToast('Import', `${table.rows.length} rows and ${table.names.length} columns imported`, 'ok');
+    } catch (error) {
+      console.error(error);
+      showToast('Import', 'Could not read the CSV file', 'error');
+    }
+  };
+
+  const exportCsv = () => {
+    const rows = trimEmptyRows(grid.rows).map(row => grid.cols.map((_, index) => row[index] ?? ''));
+    if (rows.length === 0) {
+      showToast('Export', 'There is nothing to export', 'warn');
+      return;
+    }
+    const csv = toCsv(grid.cols.map(column => column.name), rows);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'lazstats.csv';
+    anchor.click();
+    URL.revokeObjectURL(url);
+    showToast('Export', `${rows.length} rows exported`, 'ok');
+  };
+
   const [descVars, setDescVars] = useState<number[]>([0, 1]);
   const [ciLevel, setCiLevel] = useState(95);
   const [ttestParams, setTTestParams] = useState({
@@ -231,6 +280,16 @@ export default function App() {
     runFisherExact: true
   });
 
+  const contingencyRef = useRef<ContingencyHandle>(null);
+  const sampleSizeRef = useRef<SampleSizeHandle>(null);
+  const distFitRef = useRef<DistributionFitHandle>(null);
+  const factorialRef = useRef<FactorialAnovaHandle>(null);
+  const logisticRef = useRef<LogisticHandle>(null);
+  const timeSeriesRef = useRef<TimeSeriesHandle>(null);
+  const survivalRef = useRef<SurvivalHandle>(null);
+  const coxRef = useRef<CoxHandle>(null);
+  const wizardRef = useRef<WizardHandle>(null);
+
   const runAnalysis = () => {
     switch (activeAnalysis) {
       case 'descriptive':
@@ -250,6 +309,33 @@ export default function App() {
         break;
       case 'chisquare':
         runChiSquare();
+        break;
+      case 'contingency':
+        contingencyRef.current?.run();
+        break;
+      case 'samplesize':
+        sampleSizeRef.current?.run();
+        break;
+      case 'distfit':
+        distFitRef.current?.run();
+        break;
+      case 'factorial':
+        factorialRef.current?.run();
+        break;
+      case 'logistic':
+        logisticRef.current?.run();
+        break;
+      case 'timeseries':
+        timeSeriesRef.current?.run();
+        break;
+      case 'survival':
+        survivalRef.current?.run();
+        break;
+      case 'cox':
+        coxRef.current?.run();
+        break;
+      case 'wizard':
+        wizardRef.current?.run();
         break;
       default:
         showToast('Analysis', 'Analysis type not implemented yet', 'warn');
@@ -2035,8 +2121,19 @@ export default function App() {
             <div className="bg-surface border-b border-border p-1.5 flex items-center gap-2 shrink-0">
               <span className="font-mono text-[10px] text-text3 uppercase tracking-widest px-2">File:</span>
               <button className="tb-btn" onClick={() => setGrid({ cols: [{ name: 'Var1', type: 'num' }], rows: Array(20).fill(['']) })}>New</button>
-              <button className="tb-btn">Import CSV</button>
-              <button className="tb-btn">Export CSV</button>
+              <button className="tb-btn" onClick={() => csvInputRef.current?.click()}>Import CSV</button>
+              <button className="tb-btn" onClick={exportCsv}>Export CSV</button>
+              <input
+                ref={csvInputRef}
+                type="file"
+                accept=".csv,.txt,text/csv,text/plain"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void importCsv(file);
+                  event.target.value = '';
+                }}
+              />
               <div className="h-4 w-px bg-border mx-2" />
               <button className="tb-btn text-yellow" onClick={() => showToast('Validation', 'All cells validated successfully', 'ok')}>Validate</button>
             </div>
@@ -2111,12 +2208,21 @@ export default function App() {
             <div className="bg-surface border-b border-border shrink-0">
               <div className="flex overflow-x-auto scrollbar">
                 {[
+                  { id: 'wizard', label: 'Wizard' },
                   { id: 'descriptive', label: 'Descriptive' },
                   { id: 'ttest', label: 'T-Test' },
                   { id: 'anova', label: 'ANOVA' },
                   { id: 'regression', label: 'Regression' },
                   { id: 'correlation', label: 'Correlation' },
-                  { id: 'chisquare', label: 'Chi-Square (χ²)' }
+                  { id: 'chisquare', label: 'Chi-Square (χ²)' },
+                  { id: 'contingency', label: 'Contingency (R×C)' },
+                  { id: 'samplesize', label: 'Sample Size / Power' },
+                  { id: 'distfit', label: 'Distribution Fit' },
+                  { id: 'factorial', label: 'Factorial ANOVA' },
+                  { id: 'logistic', label: 'Logistic Regression' },
+                  { id: 'timeseries', label: 'Time Series' },
+                  { id: 'survival', label: 'Survival (KM)' },
+                  { id: 'cox', label: 'Cox (PH)' }
                 ].map(a => (
                   <button 
                     key={a.id}
@@ -2555,6 +2661,94 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+                )}
+
+                {activeAnalysis === 'timeseries' && (
+                  <TimeSeriesAnalysis
+                    ref={timeSeriesRef}
+                    grid={grid}
+                    ciLevel={ciLevel}
+                    onOutput={pushOutput}
+                    onError={(message) => showToast('Error', message, 'error')}
+                  />
+                )}
+
+                {activeAnalysis === 'survival' && (
+                  <SurvivalAnalysis
+                    ref={survivalRef}
+                    grid={grid}
+                    ciLevel={ciLevel}
+                    onOutput={pushOutput}
+                    onError={(message) => showToast('Error', message, 'error')}
+                  />
+                )}
+
+                {activeAnalysis === 'cox' && (
+                  <CoxAnalysis
+                    ref={coxRef}
+                    grid={grid}
+                    ciLevel={ciLevel}
+                    onOutput={pushOutput}
+                    onError={(message) => showToast('Error', message, 'error')}
+                  />
+                )}
+
+                {activeAnalysis === 'wizard' && (
+                  <WizardAnalysis
+                    ref={wizardRef}
+                    grid={grid}
+                    ciLevel={ciLevel}
+                    onOutput={pushOutput}
+                    onOpenAnalysis={(analysisId) => setActiveAnalysis(analysisId)}
+                  />
+                )}
+
+                {activeAnalysis === 'logistic' && (
+                  <LogisticAnalysis
+                    ref={logisticRef}
+                    grid={grid}
+                    ciLevel={ciLevel}
+                    onOutput={pushOutput}
+                    onError={(message) => showToast('Error', message, 'error')}
+                  />
+                )}
+
+                {activeAnalysis === 'factorial' && (
+                  <FactorialAnovaAnalysis
+                    ref={factorialRef}
+                    grid={grid}
+                    ciLevel={ciLevel}
+                    onOutput={pushOutput}
+                    onError={(message) => showToast('Error', message, 'error')}
+                  />
+                )}
+
+                {activeAnalysis === 'distfit' && (
+                  <DistributionFitAnalysis
+                    ref={distFitRef}
+                    grid={grid}
+                    ciLevel={ciLevel}
+                    onOutput={pushOutput}
+                    onError={(message) => showToast('Error', message, 'error')}
+                  />
+                )}
+
+                {activeAnalysis === 'samplesize' && (
+                  <SampleSizeAnalysis
+                    ref={sampleSizeRef}
+                    ciLevel={ciLevel}
+                    onOutput={pushOutput}
+                    onError={(message) => showToast('Error', message, 'error')}
+                  />
+                )}
+
+                {activeAnalysis === 'contingency' && (
+                  <ContingencyAnalysis
+                    ref={contingencyRef}
+                    ciLevel={ciLevel}
+                    onOutput={pushOutput}
+                    onError={(message) => showToast('Error', message, 'error')}
+                  />
                 )}
 
                 <button className="run-btn h-9 self-end" onClick={runAnalysis}>
