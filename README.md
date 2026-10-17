@@ -28,6 +28,10 @@ LazStats JS provides a spreadsheet-like data editor and a full suite of parametr
 - Bar charts, boxplots, scatter plots, line charts, histograms
 - Cumulative output console with tabbed results
 
+### Written reports
+- Every run of an analysis closes with a **Report di lettura** card: plain-language headline of the outcome, what the test actually does, the reading of each result (difference, effect size, assumptions, non-parametric counterpart), a glossary of the statistics shown and the caveats that apply
+- The text is generated from the computed tables, so it always matches the numbers on screen and follows the selected confidence level (90/95/99%)
+
 ## Tech Stack
 
 - **Framework:** React 19, TypeScript
@@ -91,8 +95,8 @@ lazstatjs/
     ├── main.tsx            # React entry point
     ├── App.tsx             # Main application component (monolithic)
     ├── statsHelpers.ts     # Legacy custom statistical functions
-    ├── stats/              # Testable statistical modules (descriptive, ttest, anova, regression, correlation, chisquare)
-    ├── components/         # Reusable ResultTable renderer
+    ├── stats/              # Testable statistical modules (descriptive, ttest, anova, regression, correlation, chisquare, report)
+    ├── components/         # Reusable ResultTable and AnalysisReport renderers
     └── index.css           # Tailwind styles + dark theme
 ```
 
@@ -100,6 +104,8 @@ lazstatjs/
 
 - **`src/App.tsx`** (~2600 lines) — Application UI, chart wiring and analysis orchestration.
 - **`src/stats/`** — Pure statistic builders returning typed `TableSpec` objects. Every builder has reference tests against SciPy/NumPy values (mean CIs, Levene, Welch ANOVA, effect sizes, regression, correlations, odds ratios).
+- **`src/stats/report.ts`** — Builds the plain-language `ReportSpec` for each analysis by reading the already computed tables (headline, effect size, assumptions, glossary, limits). Because it never recomputes statistics, the prose cannot disagree with the numbers and follows the selected CI level.
+- **`src/components/AnalysisReport.tsx`** — Renders that report as a card closing every run of an analysis, after all tables and charts.
 - **`src/statsHelpers.ts`** — Legacy hand-implemented tests: Fisher's Exact Test, Wilcoxon Signed-Rank, Mann-Whitney U, Kruskal-Wallis H, Theil-Sen regression, Kendall's Tau-b, Jarque-Bera and Kolmogorov-Smirnov normality tests.
 
 ## Scripts

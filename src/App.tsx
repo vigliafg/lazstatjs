@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   BarChart3, 
   Settings, 
@@ -17,12 +17,22 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { jStat } from './stats/jstat';
 import { ResultTables } from './components/ResultTable';
+import { AnalysisReport } from './components/AnalysisReport';
 import { descriptiveTables } from './stats/descriptive';
 import { ttestTables } from './stats/ttest';
 import { anovaTables } from './stats/anova';
 import { regressionTables } from './stats/regression';
 import { correlationTables } from './stats/correlation';
 import { chiSquareTables } from './stats/chisquare';
+import {
+  anovaReport,
+  chiSquareReport,
+  correlationReport,
+  descriptiveReport,
+  regressionReport,
+  ttestReport,
+  type ReportSpec,
+} from './stats/report';
 import { lillieforsTest } from './stats/distributions';
 import { 
   VictoryChart, 
@@ -118,11 +128,24 @@ export default function App() {
   });
   const [outputs, setOutputs] = useState<React.ReactNode[]>([]);
   const [toasts, setToasts] = useState<{ id: number; title: string; msg: string; type: 'ok' | 'warn' | 'error' }[]>([]);
-  const outputEndRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
-    outputEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Scroll only the output container: scrollIntoView() also scrolls the
+    // document/ancestors in some browsers, hiding the main tabs and controls.
+    const el = document.getElementById('output-content');
+    if (el) el.scrollTop = el.scrollHeight;
   }, [outputs]);
+
+  // Each run pushes a single block: the written report is part of that block,
+  // so it always closes the run after every table and chart.
+  const pushOutput = (node: React.ReactNode, report: ReportSpec | null) => {
+    setOutputs(prev => [
+      ...prev,
+      <React.Fragment key={`run-${Date.now()}-${prev.length}`}>
+        {node}
+        {report && <AnalysisReport spec={report} />}
+      </React.Fragment>
+    ]);
+  };
 
   const showToast = (title: string, msg: string, type: 'ok' | 'warn' | 'error' = 'ok') => {
     const id = Date.now();
@@ -307,6 +330,7 @@ export default function App() {
       grid.cols.map(col => col.name),
       ciLevel
     );
+    const descReport = descriptiveReport(descTables, ciLevel);
 
     const output = (
       <div className="output-block" key={Date.now()}>
@@ -486,7 +510,7 @@ export default function App() {
         )}
       </div>
     );
-    setOutputs(prev => [...prev, output]);
+    pushOutput(output, descReport);
   };
 
   const runTTest = () => {
@@ -504,6 +528,7 @@ export default function App() {
     }
 
     let resultHtml: React.ReactNode;
+    let reportSpec: ReportSpec | null = null;
 
     if (type === 'one') {
       const n = a1.length;
@@ -538,6 +563,17 @@ export default function App() {
         mu,
         equalVar,
         level: ciLevel,
+        useNonParam,
+      });
+
+      reportSpec = ttestReport({
+        tables,
+        type: 'one',
+        name1: grid.cols[var1].name,
+        name2: grid.cols[var2].name,
+        mu,
+        level: ciLevel,
+        equalVar,
         useNonParam,
       });
 
@@ -717,6 +753,17 @@ export default function App() {
         useNonParam,
       });
 
+      reportSpec = ttestReport({
+        tables,
+        type: 'ind',
+        name1: grid.cols[var1].name,
+        name2: grid.cols[var2].name,
+        mu,
+        level: ciLevel,
+        equalVar,
+        useNonParam,
+      });
+
       resultHtml = (
         <div className="output-block" key={Date.now()}>
           <div className="output-title">Independent Samples T-Test & Mann-Whitney U</div>
@@ -853,6 +900,17 @@ export default function App() {
         useNonParam,
       });
 
+      reportSpec = ttestReport({
+        tables,
+        type: 'dep',
+        name1: grid.cols[var1].name,
+        name2: grid.cols[var2].name,
+        mu,
+        level: ciLevel,
+        equalVar,
+        useNonParam,
+      });
+
       resultHtml = (
         <div className="output-block" key={Date.now()}>
           <div className="output-title">Paired Samples T-Test & Wilcoxon Signed-Rank</div>
@@ -930,7 +988,7 @@ export default function App() {
         </div>
       );
     }
-    setOutputs(prev => [...prev, resultHtml]);
+    pushOutput(resultHtml, reportSpec);
   };
 
   const runANOVA = () => {
@@ -1115,6 +1173,14 @@ export default function App() {
       level: ciLevel,
       useNonParam,
     });
+    const report = anovaReport({
+      tables,
+      depName: grid.cols[dep].name,
+      grpName: grid.cols[grp].name,
+      level: ciLevel,
+      postHoc: posthoc,
+      useNonParam,
+    });
 
     const output = (
       <div className="output-block" key={Date.now()}>
@@ -1185,7 +1251,7 @@ export default function App() {
         </div>
       </div>
     );
-    setOutputs(prev => [...prev, output]);
+    pushOutput(output, report);
   };
 
   const runRegression = () => {
@@ -1445,6 +1511,12 @@ export default function App() {
       predNames: indeps.map(index => grid.cols[index].name),
       level: ciLevel,
     });
+    const report = regressionReport({
+      tables,
+      depName: grid.cols[dep].name,
+      predNames: indeps.map(index => grid.cols[index].name),
+      level: ciLevel,
+    });
 
     const output = (
       <div className="output-block" key={Date.now()}>
@@ -1531,7 +1603,7 @@ export default function App() {
 
               </div>
     );
-    setOutputs(prev => [...prev, output]);
+    pushOutput(output, report);
   };
 
   const runCorrelation = () => {
@@ -1643,6 +1715,11 @@ export default function App() {
       showSpearman,
       showKendall,
     });
+    const report = correlationReport({
+      tables,
+      method: method as 'pearson' | 'spearman' | 'kendall',
+      level: ciLevel,
+    });
 
     const output = (
       <div className="output-block" key={Date.now()}>
@@ -1750,7 +1827,7 @@ export default function App() {
         )}
       </div>
     );
-    setOutputs(prev => [...prev, output]);
+    pushOutput(output, report);
   };
 
   const runChiSquare = () => {
@@ -1845,6 +1922,14 @@ export default function App() {
       level: ciLevel,
       runFisher: runFisherExact,
     });
+    const report = chiSquareReport({
+      tables,
+      level: ciLevel,
+      row1: row1Label,
+      row2: row2Label,
+      col1: col1Label,
+      col2: col2Label,
+    });
 
     const output = (
       <div className="output-block" key={Date.now()}>
@@ -1900,7 +1985,7 @@ export default function App() {
         </div>
       </div>
     );
-    setOutputs(prev => [...prev, output]);
+    pushOutput(output, report);
   };
 
   const clearOutput = () => {
@@ -1919,7 +2004,7 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-bg text-text font-sans selection:bg-accent/30">
       {/* Main Tabs */}
-      <div className="bg-surface2 border-b border-border px-2 pt-1.5 flex gap-0.5 shrink-0">
+      <div className="bg-surface2 border-b border-border px-2 pt-1.5 flex gap-0.5 shrink-0 sticky top-0 z-50">
         <button 
           onClick={() => setActiveTab('data')}
           className={`main-tab ${activeTab === 'data' ? 'active' : ''}`}
@@ -2479,11 +2564,18 @@ export default function App() {
               </div>
             </div>
 
-            <div className="bg-surface border-b border-border px-3 py-1 flex items-center justify-between shrink-0">
+            <div className="bg-surface border-b border-border px-3 py-1 flex flex-wrap items-center justify-between gap-2 shrink-0">
               <span className="font-mono text-[10px] text-text3 uppercase tracking-widest">Output Console</span>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className="tb-btn flex items-center gap-1"
+                  onClick={() => setActiveTab('data')}
+                  aria-label="Back to Data Editor"
+                >
+                  <Database className="w-3 h-3" /> Data Editor
+                </button>
                 <button className="tb-btn" onClick={clearOutput}>Clear</button>
-                <button className="tb-btn" onClick={copyOutput}>Copy Text</button>
+                <button className="tb-btn" onClick={copyOutput}>Copy</button>
               </div>
             </div>
 
@@ -2510,10 +2602,20 @@ export default function App() {
                       {output}
                     </div>
                   ))}
-                  <div ref={outputEndRef} />
                 </div>
               )}
             </div>
+
+            {outputs.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('data')}
+                className="lg:hidden fixed bottom-4 right-4 z-50 tb-btn shadow-lg bg-surface2 border-accent text-accent"
+                aria-label="Back to Data Editor"
+              >
+                <Database className="w-3 h-3 inline mr-1" /> Data Editor
+              </button>
+            )}
           </div>
         )}
 
