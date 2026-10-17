@@ -17,12 +17,12 @@ LazStats JS provides a spreadsheet-like data editor and a full suite of parametr
 
 | Analysis | Parametric | Non-Parametric |
 |---|---|---|
-| **Descriptive** | Mean, Median, SD, Min, Max, Range, Variance, Skewness, Kurtosis, IQR, Histogram, Boxplot | Jarque-Bera & Kolmogorov-Smirnov normality tests, Q-Q Plot |
-| **T-Test** | One-Sample, Independent, Paired t-test | Wilcoxon Signed-Rank, Mann-Whitney U |
-| **ANOVA** | One-Way ANOVA, Post-Hoc Tukey/Bonferroni | Kruskal-Wallis H, Post-Hoc Mann-Whitney with Bonferroni |
-| **Regression** | OLS (Ordinary Least Squares) - simple and multiple | Theil-Sen (median slope) |
-| **Correlation** | Pearson correlation matrix | Spearman's rho, Kendall's Tau-b |
-| **Chi-Square** | Pearson Chi-Square, Yates correction | Fisher's Exact Test |
+| **Descriptive** | N/missing, sum, mean with CI, SE, median with distribution-free CI, trimmed mean, SD, variance, CV, quartiles, IQR, MAD, outliers, skewness/kurtosis with SE and z, quantiles | Jarque-Bera, Lilliefors-corrected KS, D'Agostino-Pearson, Q-Q Plot |
+| **T-Test** | One-Sample, Independent (pooled or Welch), Paired; mean difference with CI, Cohen's d, Hedges g, Glass Δ, point-biserial r, Levene/Brown-Forsythe | Wilcoxon Signed-Rank, Mann-Whitney U, rank effect sizes, CLES, Hodges-Lehmann with bootstrap CI |
+| **ANOVA** | One-Way ANOVA, group descriptives, η²/ω²/ε²/f, Levene, Welch ANOVA, post-hoc Tukey-Kramer (approx.), Bonferroni, Holm, Games-Howell | Kruskal-Wallis H, η²_H, Dunn with Holm/Bonferroni |
+| **Regression** | OLS simple/multiple: model F, ANOVA table, coefficient CIs, standardized β, VIF/tolerance, AIC/BIC, Durbin-Watson, Breusch-Pagan, Cook's D, residual diagnostics | Theil-Sen slope with bootstrap CI and residual comparison |
+| **Correlation** | Pearson pairwise table with N, p, Fisher-z CI, r²; matrices with significance; partial correlations | Spearman's rho, Kendall's Tau-b with p-values |
+| **Chi-Square** | Pearson χ², likelihood-ratio G², Yates, standardized/adjusted residuals, cell contributions, φ, Cramér's V, odds ratio, relative risk, risk difference with CIs | Fisher's Exact Test |
 
 ### Visualization
 - Bar charts, boxplots, scatter plots, line charts, histograms
@@ -90,14 +90,17 @@ lazstatjs/
 └── src/
     ├── main.tsx            # React entry point
     ├── App.tsx             # Main application component (monolithic)
-    ├── statsHelpers.ts     # Custom statistical function implementations
+    ├── statsHelpers.ts     # Legacy custom statistical functions
+    ├── stats/              # Testable statistical modules (descriptive, ttest, anova, regression, correlation, chisquare)
+    ├── components/         # Reusable ResultTable renderer
     └── index.css           # Tailwind styles + dark theme
 ```
 
 ### Key Source Files
 
-- **`src/App.tsx`** (~3000 lines) — The entire application UI and analysis logic, organized into Data Editor, Analysis & Output, and Settings tabs.
-- **`src/statsHelpers.ts`** (~560 lines) — Hand-implemented statistical functions complementing jStat: Fisher's Exact Test, Wilcoxon Signed-Rank, Mann-Whitney U, Kruskal-Wallis H, Theil-Sen regression, Kendall's Tau-b, Jarque-Bera and Kolmogorov-Smirnov normality tests.
+- **`src/App.tsx`** (~2600 lines) — Application UI, chart wiring and analysis orchestration.
+- **`src/stats/`** — Pure statistic builders returning typed `TableSpec` objects. Every builder has reference tests against SciPy/NumPy values (mean CIs, Levene, Welch ANOVA, effect sizes, regression, correlations, odds ratios).
+- **`src/statsHelpers.ts`** — Legacy hand-implemented tests: Fisher's Exact Test, Wilcoxon Signed-Rank, Mann-Whitney U, Kruskal-Wallis H, Theil-Sen regression, Kendall's Tau-b, Jarque-Bera and Kolmogorov-Smirnov normality tests.
 
 ## Scripts
 
@@ -108,10 +111,11 @@ lazstatjs/
 | `npm run preview` | Preview production build |
 | `npm run clean` | Remove `dist/` directory |
 | `npm run lint` | TypeScript type-check |
+| `npm test` | Run the statistics reference tests with `node:test` + `tsx` |
 
 ## Notes
 
 - Built from [Google AI Studio](https://ai.studio/apps/bc7748c0-92a6-49a9-ade6-1d9b6749353f)
 - `recharts` and `express` appear in dependencies but are not currently used
 - `@google/genai` SDK is installed for potential future AI integration
-- No test framework is configured
+- CI level (90/95/99%) is selectable in the analysis toolbar and applies to every table.

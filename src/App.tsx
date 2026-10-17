@@ -15,7 +15,15 @@ import {
   Info
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { jStat } from 'jstat';
+import { jStat } from './stats/jstat';
+import { ResultTables } from './components/ResultTable';
+import { descriptiveTables } from './stats/descriptive';
+import { ttestTables } from './stats/ttest';
+import { anovaTables } from './stats/anova';
+import { regressionTables } from './stats/regression';
+import { correlationTables } from './stats/correlation';
+import { chiSquareTables } from './stats/chisquare';
+import { lillieforsTest } from './stats/distributions';
 import { 
   VictoryChart, 
   VictoryBar, 
@@ -23,16 +31,11 @@ import {
   VictoryLine, 
   VictoryAxis, 
   VictoryTooltip, 
-  VictoryVoronoiContainer, 
-  VictoryBoxPlot, 
-  VictoryErrorBar,
+  VictoryVoronoiContainer,  VictoryBoxPlot,
   VictoryTheme,
   VictoryLabel,
-  VictoryGroup,
-  VictoryLegend
-} from 'victory';
-
-import { 
+  VictoryGroup
+} from 'victory';import {
   calcFisherExact, 
   calcWilcoxonSignedRank, 
   calcMannWhitneyU, 
@@ -42,6 +45,7 @@ import {
   calcNormalityTests,
   NormalityResult
 } from './statsHelpers';
+import { buildHistogram, pairedValues, parseNum, pooledTTest, welchTTest } from './stats/core';
 
 // --- Types ---
 type ColType = 'num' | 'int' | 'dec' | 'str' | 'alp' | 'chr' | 'bol' | 'dat';
@@ -86,13 +90,6 @@ const fmtP = (p: number) => {
   if (isNaN(p) || !isFinite(p)) return '—';
   if (p < 0.001) return '< 0.001';
   return p.toFixed(4);
-};
-
-const parseNum = (x: string | number | undefined | null): number => {
-  if (x === undefined || x === null) return NaN;
-  if (typeof x === 'number') return x;
-  const clean = x.trim().replace(',', '.');
-  return parseFloat(clean);
 };
 
 const validateValue = (val: string, type: ColType) => {
@@ -167,22 +164,22 @@ export default function App() {
   };
 
   const [descVars, setDescVars] = useState<number[]>([0, 1]);
+  const [ciLevel, setCiLevel] = useState(95);
   const [ttestParams, setTTestParams] = useState({
     type: 'ind' as 'ind' | 'dep' | 'one',
     var1: 0,
     var2: 1,
     mu: 0,
-    ci: 95,
     useNonParam: true,
-    continuityCorr: true
+    equalVar: true
   });
 
   const [anovaParams, setAnovaParams] = useState({
     dep: 0,
     grp: 2,
-    posthoc: 'none',
+    posthoc: 'holm',
     useNonParam: true,
-    kwPosthoc: 'bonferroni' as 'none' | 'bonferroni'
+    kwPosthoc: 'bonferroni' as 'none' | 'bonferroni' | 'holm'
   });
 
   const [regParams, setRegParams] = useState({
@@ -255,17 +252,12 @@ export default function App() {
       const kurtosis = jStat.kurtosis(data);
       const quartiles = jStat.quartiles(data); // [Q1, Q2, Q3]
 
-      // Histogram data
-      const numBins = Math.ceil(Math.sqrt(n));
-      const histogram = jStat.histogram(data, numBins);
-      const binWidth = range / numBins;
-      const histData = histogram.map((count, i) => ({
-        x: min + (i * binWidth) + (binWidth / 2),
-        y: count
-      }));
+      // Histogram data: single source of truth for bin count, edges and counts
+      const histogram = buildHistogram(data);
 
       // Normality calculations
       const normality = calcNormalityTests(data);
+      const lilliefors = lillieforsTest(data);
 
       // Q-Q Plot calculations
       const sortedData = [...data].sort((a, b) => a - b);
@@ -285,8 +277,13 @@ export default function App() {
       const qqSlope = (isNaN(stdev) || stdev === 0) ? 0 : (x75 - x25) / (q75 - q25);
       const qqIntercept = x25 - qqSlope * q25;
 
-      const xMin = -3.0;
-      const xMax = 3.0;
+      // Keep the reference line inside the observed theoretical quantiles: the
+      // old fixed ±3 range stretched the y domain far beyond the actual data.
+      const qqXMin = Math.min(...qqData.map(d => d.x));
+      const qqXMax = Math.max(...qqData.map(d => d.x));
+      const qqSpan = (qqXMax - qqXMin) || 1;
+      const xMin = qqXMin - qqSpan * 0.05;
+      const xMax = qqXMax + qqSpan * 0.05;
       const qqLineData = [
         { x: xMin, y: qqSlope * xMin + qqIntercept },
         { x: xMax, y: qqSlope * xMax + qqIntercept }
@@ -294,7 +291,8 @@ export default function App() {
 
       return { 
         name: col.name, n, mean, median, stdev, min, max, range, sum, variance, skewness, kurtosis,
-        q1: quartiles[0], q3: quartiles[2], histData, normality, qqData, qqLineData
+        q1: quartiles[0], q3: quartiles[2], histData: histogram.data, histBins: histogram.bins,
+        normality, lilliefors, qqData, qqLineData
       };
     }).filter(r => r !== null);
 
@@ -303,37 +301,17 @@ export default function App() {
       return;
     }
 
+    const descTables = descriptiveTables(
+      grid.rows,
+      descVars,
+      grid.cols.map(col => col.name),
+      ciLevel
+    );
+
     const output = (
       <div className="output-block" key={Date.now()}>
         <div className="output-title">Descriptive Statistics</div>
-        <table className="output-table mb-6">
-          <thead>
-            <tr>
-              <th>Variable</th>
-              <th>N</th>
-              <th>Mean</th>
-              <th>SD</th>
-              <th>Min</th>
-              <th>Max</th>
-              <th>Median</th>
-              <th>IQR (Q3-Q1)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {results.map((r, i) => (
-              <tr key={i}>
-                <td className="font-bold">{r.name}</td>
-                <td>{r.n}</td>
-                <td>{fmt(r.mean)}</td>
-                <td>{fmt(r.stdev)}</td>
-                <td>{fmt(r.min)}</td>
-                <td>{fmt(r.max)}</td>
-                <td>{fmt(r.median)}</td>
-                <td>{r ? fmt(r.q3 - r.q1) : ''}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ResultTables specs={descTables} />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
           <div className="h-[300px] bg-surface3/30 rounded p-2">
@@ -404,7 +382,7 @@ export default function App() {
             <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter">Distribution (Histogram): {results[0].name}</p>
             <VictoryChart
               theme={VictoryTheme.material}
-              domainPadding={10}
+              domainPadding={{ x: results[0].histBins > 1 ? 190 / results[0].histBins : 20 }}
               padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
             >
               <VictoryAxis
@@ -418,7 +396,7 @@ export default function App() {
               />
               <VictoryBar
                 data={results[0].histData}
-                style={{ data: { fill: '#34d399' } }}
+                style={{ data: { fill: '#34d399', width: results[0].histBins > 1 ? 380 / results[0].histBins : 40 } }}
                 labels={({ datum }) => `Freq: ${datum.y}`}
                 labelComponent={<VictoryTooltip style={{ fontSize: 10 }} flyoutStyle={{ fill: '#1e1e1e', stroke: '#333' }} />}
               />
@@ -432,7 +410,7 @@ export default function App() {
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
               {results.map((r, rIdx) => {
                 const isNormalJB = r.normality.jbPValue > 0.05;
-                const isNormalKS = r.normality.ksPValue > 0.05;
+                const isNormalKS = r.lilliefors.p > 0.05;
                 
                 return (
                   <div key={rIdx} className="bg-surface3/30 border border-border2 rounded-lg p-4 flex flex-col justify-between">
@@ -449,9 +427,9 @@ export default function App() {
                           </div>
                         </div>
                         <div>
-                          <div className="text-[9px] text-text3 uppercase mb-1 font-semibold tracking-tighter font-sans">Kolmogorov-Smirnov</div>
-                          <div>D Stat: <span className="text-text font-semibold">{fmt(r.normality.ksStat)}</span></div>
-                          <div>p-value: <span className={`font-bold ${isNormalKS ? 'text-green' : 'text-red/90'}`}>{fmt(r.normality.ksPValue)}</span></div>
+                          <div className="text-[9px] text-text3 uppercase mb-1 font-semibold tracking-tighter font-sans">Kolmogorov-Smirnov (Lilliefors)</div>
+                          <div>D Stat: <span className="text-text font-semibold">{fmt(r.lilliefors.d)}</span></div>
+                          <div>p-value: <span className={`font-bold ${isNormalKS ? 'text-green' : 'text-red/90'}`}>{fmt(r.lilliefors.p)}</span></div>
                           <div className="text-[10px] mt-1 text-text3 font-sans">
                             {isNormalKS ? '✓ Normal' : '✗ Non-Normal'}
                           </div>
@@ -512,11 +490,15 @@ export default function App() {
   };
 
   const runTTest = () => {
-    const { type, var1, var2, mu, ci, useNonParam, continuityCorr } = ttestParams;
+    const { type, var1, var2, mu, useNonParam, equalVar } = ttestParams;
     const a1 = grid.rows.map(r => parseNum(r[var1])).filter(v => !isNaN(v));
     const a2 = grid.rows.map(r => parseNum(r[var2])).filter(v => !isNaN(v));
 
-    if (a1.length === 0 || (type !== 'one' && a2.length === 0)) {
+    // Paired designs need complete cases per row: filtering each column on its
+    // own would pair values coming from different observations.
+    const paired = pairedValues(grid.rows, var1, var2);
+
+    if (a1.length === 0 || (type !== 'one' && a2.length === 0) || (type === 'dep' && paired.a.length === 0)) {
       showToast('Error', 'Insufficient data for T-Test', 'error');
       return;
     }
@@ -546,52 +528,24 @@ export default function App() {
         }
       ];
 
+      const tables = ttestTables({
+        type: 'one',
+        rows: grid.rows,
+        i1: var1,
+        i2: var2,
+        name1: grid.cols[var1].name,
+        name2: grid.cols[var2].name,
+        mu,
+        equalVar,
+        level: ciLevel,
+        useNonParam,
+      });
+
       resultHtml = (
         <div className="output-block" key={Date.now()}>
           <div className="output-title">One-Sample T-Test & Wilcoxon Signed-Rank: {grid.cols[var1].name}</div>
           
-          <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Parametric: One-Sample T-Test</div>
-          <table className="output-table">
-            <thead>
-              <tr><th>N</th><th>Mean</th><th>SD</th><th>SE</th><th>t</th><th>df</th><th>p</th></tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>{n}</td>
-                <td>{fmt(mean)}</td>
-                <td>{fmt(sd)}</td>
-                <td>{fmt(se)}</td>
-                <td>{fmt(t)}</td>
-                <td>{df}</td>
-                <td className={p < 0.05 ? 'text-green font-bold' : ''}>{fmtP(p)}</td>
-              </tr>
-            </tbody>
-          </table>
-          <p className="text-[10px] text-text3 mt-1 italic mb-6">H₀: μ = {mu} (Confidence Interval: {ci}%)</p>
-
-          {useNonParam && !isNaN(wilcox.wStat) && (
-            <div className="border-t border-border/30 pt-4 mt-4">
-              <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric: Wilcoxon Signed-Rank Test</div>
-              <table className="output-table mb-2">
-                <thead>
-                  <tr><th>N (Effective)</th><th>W Statistic</th><th>Z Score</th><th>p-value</th><th>Sig.</th></tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>{wilcox.nEffective}</td>
-                    <td>{fmt(wilcox.wStat)}</td>
-                    <td>{fmt(wilcox.zStat)}</td>
-                    <td className={wilcox.pValue < 0.05 ? 'text-green font-bold' : ''}>{fmtP(wilcox.pValue)}</td>
-                    <td>{wilcox.pValue < 0.05 ? '*' : ''}{wilcox.pValue < 0.01 ? '*' : ''}{wilcox.pValue < 0.001 ? '*' : ''}</td>
-                  </tr>
-                </tbody>
-              </table>
-              <div className="flex gap-4 text-[10px] text-text3 mb-6 bg-surface3/20 p-2 rounded max-w-fit">
-                <span>Sum of Positive Ranks (W⁺): <strong className="text-accent">{fmt(wilcox.posRankSum)}</strong></span>
-                <span>Sum of Negative Ranks (W⁻): <strong className="text-accent">{fmt(wilcox.negRankSum)}</strong></span>
-              </div>
-            </div>
-          )}
+          <ResultTables specs={tables} />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
             <div className="h-[250px] bg-surface3/30 rounded p-2">
@@ -671,17 +625,17 @@ export default function App() {
     } else if (type === 'ind') {
       const n1 = a1.length;
       const n2 = a2.length;
+      if (n1 < 2 || n2 < 2) {
+        showToast('Error', 'Each group needs at least 2 numeric values', 'error');
+        return;
+      }
       const m1 = jStat.mean(a1);
       const m2 = jStat.mean(a2);
       const v1 = jStat.variance(a1, true);
       const v2 = jStat.variance(a2, true);
 
-      // Pooled variance
-      const sp2 = ((n1 - 1) * v1 + (n2 - 1) * v2) / (n1 + n2 - 2);
-      const se = Math.sqrt(sp2 * (1/n1 + 1/n2));
-      const t = (m1 - m2) / se;
-      const df = n1 + n2 - 2;
-      const p = 2 * (1 - jStat.studentt.cdf(Math.abs(t), df));
+      const { t, df, p } = equalVar ? pooledTTest(a1, a2) : welchTTest(a1, a2);
+      const varianceLabel = equalVar ? 'Pooled Variance' : "Welch's Unequal Variances";
 
       // Mann-Whitney U test
       const mw = calcMannWhitneyU(a1, a2);
@@ -750,50 +704,25 @@ export default function App() {
         }
       ];
 
+      const tables = ttestTables({
+        type: 'ind',
+        rows: grid.rows,
+        i1: var1,
+        i2: var2,
+        name1: grid.cols[var1].name,
+        name2: grid.cols[var2].name,
+        mu,
+        equalVar,
+        level: ciLevel,
+        useNonParam,
+      });
+
       resultHtml = (
         <div className="output-block" key={Date.now()}>
           <div className="output-title">Independent Samples T-Test & Mann-Whitney U</div>
           <p className="text-[11px] mb-4 text-accent2">{grid.cols[var1].name} vs {grid.cols[var2].name}</p>
           
-          <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Parametric: Independent Samples T-Test</div>
-          <table className="output-table mb-6">
-            <thead>
-              <tr><th>Group</th><th>N</th><th>Mean</th><th>SD</th><th>t</th><th>df</th><th>p</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>{grid.cols[var1].name}</td><td>{n1}</td><td>{fmt(m1)}</td><td>{fmt(Math.sqrt(v1))}</td><td rowSpan={2} className="align-middle">{fmt(t)}</td><td rowSpan={2} className="align-middle">{df}</td><td rowSpan={2} className="align-middle font-bold text-green">{fmtP(p)}</td></tr>
-              <tr><td>{grid.cols[var2].name}</td><td>{n2}</td><td>{fmt(m2)}</td><td>{fmt(Math.sqrt(v2))}</td></tr>
-            </tbody>
-          </table>
-
-          {useNonParam && !isNaN(mw.uStat) && (
-            <div className="border-t border-border/30 pt-4 mt-4">
-              <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric: Mann-Whitney U Test (Wilcoxon Rank-Sum)</div>
-              <table className="output-table mb-6">
-                <thead>
-                  <tr><th>Group</th><th>N</th><th>Rank Sum</th><th>Mean Rank</th><th>U Statistic</th><th>Z Score</th><th>p-value</th><th>Sig.</th></tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>{grid.cols[var1].name}</td>
-                    <td>{n1}</td>
-                    <td>{fmt(mw.sumRank1, 1)}</td>
-                    <td>{fmt(mw.meanRank1, 2)}</td>
-                    <td rowSpan={2} className="align-middle">{fmt(mw.uStat, 1)}</td>
-                    <td rowSpan={2} className="align-middle">{fmt(mw.zStat, 3)}</td>
-                    <td rowSpan={2} className={`align-middle font-bold ${mw.pValue < 0.05 ? 'text-green' : ''}`}>{fmtP(mw.pValue)}</td>
-                    <td rowSpan={2} className="align-middle">{mw.pValue < 0.05 ? '*' : ''}{mw.pValue < 0.01 ? '*' : ''}{mw.pValue < 0.001 ? '*' : ''}</td>
-                  </tr>
-                  <tr>
-                    <td>{grid.cols[var2].name}</td>
-                    <td>{n2}</td>
-                    <td>{fmt(mw.sumRank2, 1)}</td>
-                    <td>{fmt(mw.meanRank2, 2)}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          )}
+          <ResultTables specs={tables} />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
             <div className="h-[250px] bg-surface3/30 rounded p-2">
@@ -859,10 +788,14 @@ export default function App() {
         </div>
       );
     } else if (type === 'dep') {
-      // Paired samples
-      const n = Math.min(a1.length, a2.length);
-      const diffs = [];
-      for(let i=0; i<n; i++) diffs.push(a1[i] - a2[i]);
+      // Paired samples: only rows where both columns hold a numeric value
+      const n = paired.a.length;
+      if (n < 2) {
+        showToast('Error', 'Paired T-Test needs at least 2 complete pairs', 'error');
+        return;
+      }
+      const diffs: number[] = [];
+      for (let i = 0; i < n; i++) diffs.push(paired.a[i] - paired.b[i]);
 
       const meanDiff = jStat.mean(diffs);
       const sdDiff = jStat.stdev(diffs, true);
@@ -874,24 +807,24 @@ export default function App() {
       // Wilcoxon Signed-Rank Test (paired differences vs 0)
       const wilcox = calcWilcoxonSignedRank(diffs, 0);
 
-      const q1 = jStat.quartiles(a1);
-      const q2 = jStat.quartiles(a2);
+      const q1 = jStat.quartiles(paired.a);
+      const q2 = jStat.quartiles(paired.b);
       const boxDataPaired = [
         {
           x: grid.cols[var1].name,
-          min: jStat.min(a1),
+          min: jStat.min(paired.a),
           q1: q1[0],
           median: q1[1],
           q3: q1[2],
-          max: jStat.max(a1)
+          max: jStat.max(paired.a)
         },
         {
           x: grid.cols[var2].name,
-          min: jStat.min(a2),
+          min: jStat.min(paired.b),
           q1: q2[0],
           median: q2[1],
           q3: q2[2],
-          max: jStat.max(a2)
+          max: jStat.max(paired.b)
         }
       ];
 
@@ -907,51 +840,25 @@ export default function App() {
         }
       ];
 
+      const tables = ttestTables({
+        type: 'dep',
+        rows: grid.rows,
+        i1: var1,
+        i2: var2,
+        name1: grid.cols[var1].name,
+        name2: grid.cols[var2].name,
+        mu,
+        equalVar,
+        level: ciLevel,
+        useNonParam,
+      });
+
       resultHtml = (
         <div className="output-block" key={Date.now()}>
           <div className="output-title">Paired Samples T-Test & Wilcoxon Signed-Rank</div>
           <p className="text-[11px] mb-4 text-accent2">{grid.cols[var1].name} - {grid.cols[var2].name}</p>
           
-          <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Parametric: Paired Samples T-Test</div>
-          <table className="output-table mb-6">
-            <thead>
-              <tr><th>Mean Diff</th><th>SD Diff</th><th>SE</th><th>t</th><th>df</th><th>p</th></tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>{fmt(meanDiff)}</td>
-                <td>{fmt(sdDiff)}</td>
-                <td>{fmt(se)}</td>
-                <td>{fmt(t)}</td>
-                <td>{df}</td>
-                <td className={p < 0.05 ? 'text-green font-bold' : ''}>{fmtP(p)}</td>
-              </tr>
-            </tbody>
-          </table>
-
-          {useNonParam && !isNaN(wilcox.wStat) && (
-            <div className="border-t border-border/30 pt-4 mt-4">
-              <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric: Wilcoxon Signed-Rank Test (Paired)</div>
-              <table className="output-table mb-2">
-                <thead>
-                  <tr><th>N (Effective)</th><th>W Statistic</th><th>Z Score</th><th>p-value</th><th>Sig.</th></tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>{wilcox.nEffective}</td>
-                    <td>{fmt(wilcox.wStat)}</td>
-                    <td>{fmt(wilcox.zStat)}</td>
-                    <td className={wilcox.pValue < 0.05 ? 'text-green font-bold' : ''}>{fmtP(wilcox.pValue)}</td>
-                    <td>{wilcox.pValue < 0.05 ? '*' : ''}{wilcox.pValue < 0.01 ? '*' : ''}{wilcox.pValue < 0.001 ? '*' : ''}</td>
-                  </tr>
-                </tbody>
-              </table>
-              <div className="flex gap-4 text-[10px] text-text3 mb-6 bg-surface3/20 p-2 rounded max-w-fit">
-                <span>Sum of Positive Ranks (W⁺): <strong className="text-accent">{fmt(wilcox.posRankSum)}</strong></span>
-                <span>Sum of Negative Ranks (W⁻): <strong className="text-accent">{fmt(wilcox.negRankSum)}</strong></span>
-              </div>
-            </div>
-          )}
+          <ResultTables specs={tables} />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
             <div className="h-[250px] bg-surface3/30 rounded p-2">
@@ -1197,100 +1104,23 @@ export default function App() {
       y: kw.groupMeanRanks[key] || 0
     }));
 
+    const tables = anovaTables({
+      rows: grid.rows,
+      depIdx: dep,
+      grpIdx: grp,
+      depName: grid.cols[dep].name,
+      grpName: grid.cols[grp].name,
+      posthoc: posthoc as any,
+      kwPosthoc,
+      level: ciLevel,
+      useNonParam,
+    });
+
     const output = (
       <div className="output-block" key={Date.now()}>
         <div className="output-title">One-Way ANOVA & Kruskal-Wallis: {grid.cols[dep].name} by {grid.cols[grp].name}</div>
         
-        <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Parametric: One-Way ANOVA</div>
-        <table className="output-table mb-4">
-          <thead>
-            <tr><th>Source</th><th>SS</th><th>df</th><th>MS</th><th>F</th><th>p</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Between</td><td>{fmt(ssBetween)}</td><td>{dfBetween}</td><td>{fmt(msBetween)}</td><td rowSpan={2} className="align-middle">{fmt(f)}</td><td rowSpan={2} className="align-middle font-bold text-green">{fmtP(p)}</td></tr>
-            <tr><td>Within</td><td>{fmt(ssWithin)}</td><td>{dfWithin}</td><td>{fmt(msWithin)}</td></tr>
-            <tr className="border-t border-border font-bold"><td>Total</td><td>{fmt(ssBetween + ssWithin)}</td><td>{nTotal - 1}</td><td></td><td></td><td></td></tr>
-          </tbody>
-        </table>
-
-        {postHocResults.length > 0 && (
-          <div className="mb-6">
-            <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Post-Hoc Tests ({postHocResults[0].testName})</div>
-            <table className="output-table">
-              <thead>
-                <tr><th>Comparison</th><th>Mean Diff</th><th>p-adj</th><th>Sig.</th></tr>
-              </thead>
-              <tbody>
-                {postHocResults.map((res, idx) => (
-                  <tr key={idx}>
-                    <td>{res.comp}</td>
-                    <td>{fmt(res.diff)}</td>
-                    <td className={res.p < 0.05 ? 'text-green font-bold' : ''}>{fmtP(res.p)}</td>
-                    <td>{res.p < 0.05 ? '*' : ''}{res.p < 0.01 ? '*' : ''}{res.p < 0.001 ? '*' : ''}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {useNonParam && !isNaN(kw.hStat) && (
-          <div className="border-t border-border/30 pt-4 mt-6">
-            <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric: Kruskal-Wallis H Test</div>
-            <table className="output-table mb-4">
-              <thead>
-                <tr><th>Chi-Square (H)</th><th>df</th><th>p-value</th><th>Sig.</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>{fmt(kw.hStat)}</td>
-                  <td>{kw.df}</td>
-                  <td className={kw.pValue < 0.05 ? 'text-green font-bold' : ''}>{fmtP(kw.pValue)}</td>
-                  <td>{kw.pValue < 0.05 ? '*' : ''}{kw.pValue < 0.01 ? '*' : ''}{kw.pValue < 0.001 ? '*' : ''}</td>
-                </tr>
-              </tbody>
-            </table>
-
-            <div className="text-[10px] text-text3 font-semibold mb-2">Group Ranks Summary</div>
-            <table className="output-table mb-4">
-              <thead>
-                <tr><th>Group</th><th>N</th><th>Rank Sum</th><th>Mean Rank</th></tr>
-              </thead>
-              <tbody>
-                {groupKeys.map(key => (
-                  <tr key={key}>
-                    <td className="font-bold">{key}</td>
-                    <td>{kw.groupNs[key]}</td>
-                    <td>{fmt(kw.groupRankSums[key], 1)}</td>
-                    <td>{fmt(kw.groupMeanRanks[key], 2)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            {kwPostHocResults.length > 0 && (
-              <div className="mb-6">
-                <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric Post-Hoc: Pairwise Mann-Whitney (Bonferroni)</div>
-                <table className="output-table">
-                  <thead>
-                    <tr><th>Comparison</th><th>U Statistic</th><th>Z Score</th><th>p-adj</th><th>Sig.</th></tr>
-                  </thead>
-                  <tbody>
-                    {kwPostHocResults.map((res, idx) => (
-                      <tr key={idx}>
-                        <td>{res.comp}</td>
-                        <td>{fmt(res.uStat, 1)}</td>
-                        <td>{fmt(res.zStat, 3)}</td>
-                        <td className={res.p < 0.05 ? 'text-green font-bold' : ''}>{fmtP(res.p)}</td>
-                        <td>{res.p < 0.05 ? '*' : ''}{res.p < 0.01 ? '*' : ''}{res.p < 0.001 ? '*' : ''}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
+        <ResultTables specs={tables} />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
           <div className="h-[300px] bg-surface3/30 rounded p-2">
@@ -1607,77 +1437,19 @@ export default function App() {
       }
     }
 
+    const tables = regressionTables({
+      rows: grid.rows,
+      depIdx: dep,
+      indepIdxs: indeps,
+      depName: grid.cols[dep].name,
+      predNames: indeps.map(index => grid.cols[index].name),
+      level: ciLevel,
+    });
+
     const output = (
       <div className="output-block" key={Date.now()}>
         <div className="output-title">Linear Regression & Robust Estimators: {grid.cols[dep].name}</div>
-        <div className="mb-4">
-          <span className="text-[11px] text-text2 mr-4">R²: <span className="text-accent font-bold">{fmt(R2)}</span></span>
-          <span className="text-[11px] text-text2 mr-4">Adj. R²: <span className="text-accent font-bold">{fmt(1 - (1 - R2) * (n - 1) / df)}</span></span>
-          <span className="text-[11px] text-text2">N: <span className="text-accent font-bold">{n}</span></span>
-        </div>
-
-        <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Parametric: Ordinary Least Squares (OLS)</div>
-        <table className="output-table mb-6">
-          <thead>
-            <tr><th>Variable</th><th>Coef (B)</th><th>Std. Error</th><th>t</th><th>p</th></tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td className="font-bold italic">Intercept</td>
-              <td>{fmt(coef[0])}</td>
-              <td>{fmt(se[0])}</td>
-              <td>{fmt(tStats[0])}</td>
-              <td className={pValues[0] < 0.05 ? 'text-green font-bold' : ''}>{fmtP(pValues[0])}</td>
-            </tr>
-            {indeps.map((idx, i) => (
-              <tr key={idx}>
-                <td className="font-bold">{grid.cols[idx].name}</td>
-                <td>{fmt(coef[i+1])}</td>
-                <td>{fmt(se[i+1])}</td>
-                <td>{fmt(tStats[i+1])}</td>
-                <td className={pValues[i+1] < 0.05 ? 'text-green font-bold' : ''}>{fmtP(pValues[i+1])}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-
-        {useNonParam && (
-          <div className="border-t border-border/30 pt-4 mt-4">
-            <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric: Robust Theil-Sen Estimator</div>
-            {k === 1 ? (
-              <table className="output-table mb-6">
-                <thead>
-                  <tr><th>Variable</th><th>OLS Slope</th><th>Theil-Sen Robust Slope</th><th>OLS Intercept</th><th>Theil-Sen Robust Intercept</th></tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td className="font-bold">{grid.cols[indeps[0]].name}</td>
-                    <td>{fmt(coef[1])}</td>
-                    <td className="text-green font-bold bg-green/5">{fmt(tsSlope)}</td>
-                    <td>{fmt(coef[0])}</td>
-                    <td>{fmt(tsIntercept)}</td>
-                  </tr>
-                </tbody>
-              </table>
-            ) : (
-              <table className="output-table mb-6">
-                <thead>
-                  <tr><th>Predictor</th><th>OLS Slope (B)</th><th>Theil-Sen Univariate Robust Slope</th></tr>
-                </thead>
-                <tbody>
-                  {tsEstimators.map((est, i) => (
-                    <tr key={i}>
-                      <td className="font-bold">{est.name}</td>
-                      <td>{fmt(coef[i+1])}</td>
-                      <td className="text-green font-bold bg-green/5">{fmt(est.slope)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            <p className="text-[10px] text-text3 italic mb-4">Note: Theil-Sen estimator represents the median slope between all pairs of data points, making it highly robust to outliers.</p>
-          </div>
-        )}
+        <ResultTables specs={tables} />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
           {indeps.length === 1 && (
@@ -1757,103 +1529,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="mt-6 border-t border-border/30 pt-4">
-          <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">
-            Studio e Analisi Statistica dei Residui
-          </div>
-          <table className="output-table">
-            <thead>
-              <tr>
-                <th className="text-left py-2 px-3 text-xs font-mono">Metrica</th>
-                <th className="text-left py-2 px-3 text-xs font-mono">Residui OLS</th>
-                {tsResidStats && <th className="text-left py-2 px-3 text-xs font-mono">Residui Theil-Sen</th>}
-              </tr>
-            </thead>
-            <tbody>
-              <tr className="border-b border-border/10">
-                <td className="font-bold py-2 px-3 text-xs">Media (Mean)</td>
-                <td className="py-2 px-3 text-xs font-mono">{fmt(olsResidStats.mean)}</td>
-                {tsResidStats && <td className="py-2 px-3 text-xs font-mono">{fmt(tsResidStats.mean)}</td>}
-              </tr>
-              <tr className="border-b border-border/10">
-                <td className="font-bold py-2 px-3 text-xs">Mediana (Median)</td>
-                <td className="py-2 px-3 text-xs font-mono">{fmt(olsResidStats.median)}</td>
-                {tsResidStats && <td className="py-2 px-3 text-xs font-mono">{fmt(tsResidStats.median)}</td>}
-              </tr>
-              <tr className="border-b border-border/10">
-                <td className="font-bold py-2 px-3 text-xs">Deviazione Standard (Std Dev)</td>
-                <td className="py-2 px-3 text-xs font-mono">{fmt(olsResidStats.stdev)}</td>
-                {tsResidStats && <td className="py-2 px-3 text-xs font-mono">{fmt(tsResidStats.stdev)}</td>}
-              </tr>
-              <tr className="border-b border-border/10">
-                <td className="font-bold py-2 px-3 text-xs">Minimo / Massimo (Min / Max)</td>
-                <td className="py-2 px-3 text-xs font-mono">{fmt(olsResidStats.min)} / {fmt(olsResidStats.max)}</td>
-                {tsResidStats && <td className="py-2 px-3 text-xs font-mono">{fmt(tsResidStats.min)} / {fmt(tsResidStats.max)}</td>}
-              </tr>
-              <tr className="border-b border-border/10">
-                <td className="font-bold py-2 px-3 text-xs">Asimmetria (Skewness)</td>
-                <td className="py-2 px-3 text-xs font-mono">{fmt(olsResidStats.skew)}</td>
-                {tsResidStats && <td className="py-2 px-3 text-xs font-mono">{fmt(tsResidStats.skew)}</td>}
-              </tr>
-              <tr className="border-b border-border/10">
-                <td className="font-bold py-2 px-3 text-xs">Curtosi in Eccesso (Excess Kurtosis)</td>
-                <td className="py-2 px-3 text-xs font-mono">{fmt(olsResidStats.kurt)}</td>
-                {tsResidStats && <td className="py-2 px-3 text-xs font-mono">{fmt(tsResidStats.kurt)}</td>}
-              </tr>
-              <tr className="border-b border-border/10">
-                <td className="font-bold py-2 px-3 text-xs">Test Jarque-Bera (JB Stat, p-value)</td>
-                <td className="py-2 px-3 text-xs">
-                  <div className="flex flex-col gap-0.5 font-mono">
-                    <span>Stat: <b>{fmt(olsResidStats.norm.jbStat)}</b></span>
-                    <span>p-val: <b className={olsResidStats.norm.jbPValue < 0.05 ? 'text-red/90' : 'text-green'}>{fmt(olsResidStats.norm.jbPValue)}</b></span>
-                    <span className="text-[10px] text-text3 font-sans mt-0.5">
-                      {olsResidStats.norm.jbPValue > 0.05 ? '✓ Distr. Normale' : '✗ Distr. Non Normale'}
-                    </span>
-                  </div>
-                </td>
-                {tsResidStats && (
-                  <td className="py-2 px-3 text-xs">
-                    <div className="flex flex-col gap-0.5 font-mono">
-                      <span>Stat: <b>{fmt(tsResidStats.norm.jbStat)}</b></span>
-                      <span>p-val: <b className={tsResidStats.norm.jbPValue < 0.05 ? 'text-red/90' : 'text-green'}>{fmt(tsResidStats.norm.jbPValue)}</b></span>
-                      <span className="text-[10px] text-text3 font-sans mt-0.5">
-                        {tsResidStats.norm.jbPValue > 0.05 ? '✓ Distr. Normale' : '✗ Distr. Non Normale'}
-                      </span>
-                    </div>
-                  </td>
-                )}
-              </tr>
-              <tr>
-                <td className="font-bold py-2 px-3 text-xs">Test Kolmogorov-Smirnov (D Stat, p-value)</td>
-                <td className="py-2 px-3 text-xs">
-                  <div className="flex flex-col gap-0.5 font-mono">
-                    <span>Stat (D): <b>{fmt(olsResidStats.norm.ksStat)}</b></span>
-                    <span>p-val: <b className={olsResidStats.norm.ksPValue < 0.05 ? 'text-red/90' : 'text-green'}>{fmt(olsResidStats.norm.ksPValue)}</b></span>
-                    <span className="text-[10px] text-text3 font-sans mt-0.5">
-                      {olsResidStats.norm.ksPValue > 0.05 ? '✓ Distr. Normale' : '✗ Distr. Non Normale'}
-                    </span>
-                  </div>
-                </td>
-                {tsResidStats && (
-                  <td className="py-2 px-3 text-xs">
-                    <div className="flex flex-col gap-0.5 font-mono">
-                      <span>Stat (D): <b>{fmt(tsResidStats.norm.ksStat)}</b></span>
-                      <span>p-val: <b className={tsResidStats.norm.ksPValue < 0.05 ? 'text-red/90' : 'text-green'}>{fmt(tsResidStats.norm.ksPValue)}</b></span>
-                      <span className="text-[10px] text-text3 font-sans mt-0.5">
-                        {tsResidStats.norm.ksPValue > 0.05 ? '✓ Distr. Normale' : '✗ Distr. Non Normale'}
-                      </span>
-                    </div>
-                  </td>
-                )}
-              </tr>
-            </tbody>
-          </table>
-          <p className="text-[10px] text-text3 italic mt-3 leading-relaxed">
-            * Nota: L&#39;analisi diagnostica dei residui serve a verificare i presupposti fondamentali del modello classico di regressione lineare.
-            Residui distribuiti normalmente (con p-value &gt; 0,05 nei test di Jarque-Bera o Kolmogorov-Smirnov) e con media vicina a zero indicano che il modello cattura correttamente la struttura dei dati senza distorsioni sistematiche.
-          </p>
-        </div>
-      </div>
+              </div>
     );
     setOutputs(prev => [...prev, output]);
   };
@@ -1958,74 +1634,21 @@ export default function App() {
       }));
     }
 
+    const tables = correlationTables({
+      rows: grid.rows,
+      varIdxs: vars,
+      varNames: vars.map(index => grid.cols[index].name),
+      level: ciLevel,
+      method: method as any,
+      showSpearman,
+      showKendall,
+    });
+
     const output = (
       <div className="output-block" key={Date.now()}>
         <div className="output-title">Correlation Analysis Suite</div>
 
-        <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Parametric: Pearson Correlation Matrix</div>
-        <table className="output-table mb-6">
-          <thead>
-            <tr><th></th>{vars.map(v => <th key={v}>{grid.cols[v].name}</th>)}</tr>
-          </thead>
-          <tbody>
-            {vars.map((v1, i) => (
-              <tr key={v1}>
-                <td className="font-bold">{grid.cols[v1].name}</td>
-                {vars.map((v2, j) => (
-                  <td key={v2} className={Math.abs(matrixPearson[i][j]) > 0.5 && i !== j ? 'text-accent font-bold' : ''}>
-                    {isNaN(matrixPearson[i][j]) ? 'N/A' : fmt(matrixPearson[i][j], 3)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-
-        {showSpearman && (
-          <div className="border-t border-border/30 pt-4 mt-4">
-            <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric: Spearman Rank Correlation Matrix (ρ)</div>
-            <table className="output-table mb-6">
-              <thead>
-                <tr><th></th>{vars.map(v => <th key={v}>{grid.cols[v].name}</th>)}</tr>
-              </thead>
-              <tbody>
-                {vars.map((v1, i) => (
-                  <tr key={v1}>
-                    <td className="font-bold">{grid.cols[v1].name}</td>
-                    {vars.map((v2, j) => (
-                      <td key={v2} className={Math.abs(matrixSpearman[i][j]) > 0.5 && i !== j ? 'text-green font-bold' : ''}>
-                        {isNaN(matrixSpearman[i][j]) ? 'N/A' : fmt(matrixSpearman[i][j], 3)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {showKendall && (
-          <div className="border-t border-border/30 pt-4 mt-4">
-            <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Non-Parametric: Kendall's Tau-b Correlation Matrix (τ)</div>
-            <table className="output-table mb-6">
-              <thead>
-                <tr><th></th>{vars.map(v => <th key={v}>{grid.cols[v].name}</th>)}</tr>
-              </thead>
-              <tbody>
-                {vars.map((v1, i) => (
-                  <tr key={v1}>
-                    <td className="font-bold">{grid.cols[v1].name}</td>
-                    {vars.map((v2, j) => (
-                      <td key={v2} className={Math.abs(matrixKendall[i][j]) > 0.5 && i !== j ? 'text-purple-400 font-bold' : ''}>
-                        {isNaN(matrixKendall[i][j]) ? 'N/A' : fmt(matrixKendall[i][j], 3)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <ResultTables specs={tables} />
 
         {vars.length === 2 ? (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
@@ -2199,29 +1822,6 @@ export default function App() {
     const minExpected = Math.min(e11, e12, e21, e22);
     const showCochranWarning = minExpected < 5;
 
-    const obsValues = [o11, o12, o21, o22];
-    const expValues = [e11, e12, e21, e22];
-    const qObs = jStat.quartiles(obsValues);
-    const qExp = jStat.quartiles(expValues);
-    const boxDataChisq = [
-      {
-        x: "Observed",
-        min: jStat.min(obsValues),
-        q1: qObs[0],
-        median: qObs[1],
-        q3: qObs[2],
-        max: jStat.max(obsValues)
-      },
-      {
-        x: "Expected",
-        min: jStat.min(expValues),
-        q1: qExp[0],
-        median: qExp[1],
-        q3: qExp[2],
-        max: jStat.max(expValues)
-      }
-    ];
-
     const chartDataObs = [
       { x: `${row1Label}\n(${col1Label})`, y: o11 },
       { x: `${row1Label}\n(${col2Label})`, y: o12 },
@@ -2236,80 +1836,21 @@ export default function App() {
       { x: `${row2Label}\n(${col2Label})`, y: e22 }
     ];
 
+    const tables = chiSquareTables({
+      o11, o12, o21, o22,
+      row1: row1Label,
+      row2: row2Label,
+      col1: col1Label,
+      col2: col2Label,
+      level: ciLevel,
+      runFisher: runFisherExact,
+    });
+
     const output = (
       <div className="output-block" key={Date.now()}>
         <div className="output-title">Chi-Square (χ²) Test of Independence</div>
         
-        <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Contingency Table: Observed vs (Expected)</div>
-        <table className="output-table mb-6">
-          <thead>
-            <tr>
-              <th></th>
-              <th>{col1Label}</th>
-              <th>{col2Label}</th>
-              <th className="font-bold">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td className="font-bold">{row1Label}</td>
-              <td>{o11} ({fmt(e11, 2)})</td>
-              <td>{o12} ({fmt(e12, 2)})</td>
-              <td className="font-bold">{r1}</td>
-            </tr>
-            <tr>
-              <td className="font-bold">{row2Label}</td>
-              <td>{o21} ({fmt(e21, 2)})</td>
-              <td>{o22} ({fmt(e22, 2)})</td>
-              <td className="font-bold">{r2}</td>
-            </tr>
-            <tr className="border-t border-border font-bold">
-              <td>Total</td>
-              <td>{c1}</td>
-              <td>{c2}</td>
-              <td>{n}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div className="text-[11px] text-accent2 font-semibold uppercase tracking-wider mb-2">Test Statistics (df = 1)</div>
-        <table className="output-table">
-          <thead>
-            <tr>
-              <th>Test Type</th>
-              <th>Value (χ²)</th>
-              <th>p-value</th>
-              <th>Sig.</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Pearson Chi-Square</td>
-              <td>{fmt(chi2, 4)}</td>
-              <td className={pValue < 0.05 ? 'text-green font-bold' : ''}>{fmtP(pValue)}</td>
-              <td>{pValue < 0.05 ? '*' : ''}{pValue < 0.01 ? '*' : ''}{pValue < 0.001 ? '*' : ''}</td>
-            </tr>
-            <tr>
-              <td>Yates' Continuity Correction</td>
-              <td>{fmt(chi2Yates, 4)}</td>
-              <td className={pValueYates < 0.05 ? 'text-green font-bold' : ''}>{fmtP(pValueYates)}</td>
-              <td>{pValueYates < 0.05 ? '*' : ''}{pValueYates < 0.01 ? '*' : ''}{pValueYates < 0.001 ? '*' : ''}</td>
-            </tr>
-            {runFisherExact && !isNaN(pValueFisher) && (
-              <tr>
-                <td className="font-semibold text-green">Fisher's Exact Test (Non-Parametric)</td>
-                <td>N/A (Exact Probability)</td>
-                <td className={pValueFisher < 0.05 ? 'text-green font-bold bg-green/5' : ''}>{fmtP(pValueFisher)}</td>
-                <td>{pValueFisher < 0.05 ? '*' : ''}{pValueFisher < 0.01 ? '*' : ''}{pValueFisher < 0.001 ? '*' : ''}</td>
-              </tr>
-            )}
-            <tr className="border-t border-border font-bold">
-              <td>Cramér's V (Phi Coefficient)</td>
-              <td>{fmt(phi, 4)}</td>
-              <td colSpan={2} className="text-accent">{interpretation}</td>
-            </tr>
-          </tbody>
-        </table>
+        <ResultTables specs={tables} />
 
         {showCochranWarning && (
           <div className="mt-4 p-2 bg-yellow/10 border border-yellow/20 rounded flex items-start gap-2">
@@ -2321,11 +1862,15 @@ export default function App() {
           </div>
         )}
 
-        <div className="h-[300px] w-full mt-6 bg-surface3/30 rounded p-2">
-          <p className="text-[10px] text-text3 mb-2 uppercase tracking-tighter text-center">Observed vs. Expected Distributions (Boxplots)</p>
+        <div className="h-[320px] w-full mt-6 bg-surface3/30 rounded p-2">
+          <p className="text-[10px] text-text3 mb-1 uppercase tracking-tighter text-center">Observed vs. Expected Frequencies (by cell)</p>
+          <div className="flex items-center justify-center gap-4 text-[10px] text-text3 mb-1">
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: '#34d399' }} /> Observed</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: '#4f9cf9' }} /> Expected</span>
+          </div>
           <VictoryChart
             theme={VictoryTheme.material}
-            domainPadding={{ x: 50 }}
+            domainPadding={{ x: 60 }}
             padding={{ top: 20, bottom: 50, left: 50, right: 20 }}
           >
             <VictoryAxis
@@ -2337,16 +1882,20 @@ export default function App() {
               tickLabelComponent={<VictoryLabel style={{ fill: '#888', fontSize: 9 }} />}
               style={{ axis: { stroke: '#333' }, grid: { stroke: '#222' } }}
             />
-            <VictoryBoxPlot
-              data={boxDataChisq}
-              style={{
-                min: { stroke: "#f87171", strokeWidth: 1.5 },
-                max: { stroke: "#f87171", strokeWidth: 1.5 },
-                q1: { fill: "#34d399", fillOpacity: 0.4 },
-                q3: { fill: "#34d399", fillOpacity: 0.4 },
-                median: { stroke: "#fff", strokeWidth: 2 }
-              }}
-            />
+            <VictoryGroup offset={16}>
+              <VictoryBar
+                data={chartDataObs}
+                style={{ data: { fill: '#34d399', width: 14 } }}
+                labels={({ datum }) => `Observed: ${datum.y}`}
+                labelComponent={<VictoryTooltip style={{ fontSize: 9 }} flyoutStyle={{ fill: '#1e1e1e', stroke: '#333' }} />}
+              />
+              <VictoryBar
+                data={chartDataExp}
+                style={{ data: { fill: '#4f9cf9', width: 14 } }}
+                labels={({ datum }) => `Expected: ${fmt(datum.y, 2)}`}
+                labelComponent={<VictoryTooltip style={{ fontSize: 9 }} flyoutStyle={{ fill: '#1e1e1e', stroke: '#333' }} />}
+              />
+            </VictoryGroup>
           </VictoryChart>
         </div>
       </div>
@@ -2495,6 +2044,18 @@ export default function App() {
               </div>
               
               <div className="p-4 flex flex-wrap gap-6 items-start">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">CI Level</label>
+                  <select
+                    className="bg-surface3 border border-border2 text-text text-[11px] p-1.5 rounded min-w-[90px]"
+                    value={ciLevel}
+                    onChange={(e) => setCiLevel(parseInt(e.target.value))}
+                  >
+                    <option value={90}>90%</option>
+                    <option value={95}>95%</option>
+                    <option value={99}>99%</option>
+                  </select>
+                </div>
                 {activeAnalysis === 'descriptive' && (
                   <div className="flex flex-col gap-1">
                     <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">Select Variables</label>
@@ -2565,6 +2126,19 @@ export default function App() {
                         />
                       </div>
                     )}
+                    {ttestParams.type === 'ind' && (
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">Variances</label>
+                        <select
+                          className="bg-surface3 border border-border2 text-text text-[11px] p-1.5 rounded min-w-[150px]"
+                          value={ttestParams.equalVar ? 'equal' : 'welch'}
+                          onChange={(e) => setTTestParams(p => ({ ...p, equalVar: e.target.value === 'equal' }))}
+                        >
+                          <option value="equal">Equal (pooled)</option>
+                          <option value="welch">Unequal (Welch)</option>
+                        </select>
+                      </div>
+                    )}
                   </>
                 )}
 
@@ -2598,8 +2172,10 @@ export default function App() {
                         onChange={(e) => setAnovaParams(p => ({ ...p, posthoc: e.target.value as any }))}
                       >
                         <option value="none">None</option>
-                        <option value="tukey">Tukey HSD</option>
+                        <option value="tukey">Tukey–Kramer (approx.)</option>
                         <option value="bonferroni">Bonferroni</option>
+                        <option value="holm">Holm</option>
+                        <option value="gameshowell">Games–Howell</option>
                       </select>
                     </div>
                     <div className="flex flex-col gap-1">
@@ -2624,6 +2200,7 @@ export default function App() {
                         >
                           <option value="none">None</option>
                           <option value="bonferroni">Bonferroni</option>
+                          <option value="holm">Holm</option>
                         </select>
                       </div>
                     )}

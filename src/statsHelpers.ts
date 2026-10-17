@@ -1,4 +1,4 @@
-import { jStat } from 'jstat';
+import { jStat } from './stats/jstat';
 
 // Helper for log-factorials to prevent overflow in Fisher's exact test
 export const logFactorial = (n: number): number => {
