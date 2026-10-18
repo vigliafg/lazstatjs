@@ -30,7 +30,9 @@ export function ExportDialog({ grid, onClose, onExport }: Props) {
   const rows = gridToRows(grid, dropEmptyRows);
   const opts: ExportOptions = { format, delimiter, decimalSeparator, includeHeader, dropEmptyRows };
   const main = serializeTable(grid.cols.map((c) => c.name), rows, opts);
-  const preview = main.content.split('\n').slice(0, 8).join('\n');
+  // Preview on logical rows (re-serialize the head): splitting content on
+  // '\n' would cut quoted multiline cells in half.
+  const preview = serializeTable(grid.cols.map((c) => c.name), rows.slice(0, 8), opts).content;
 
   const doExport = () => {
     const prefs = loadPrefs();

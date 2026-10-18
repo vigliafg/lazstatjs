@@ -34,9 +34,14 @@ export function ImportWizard({ fileName, text, gridCols, onApply, onClose }: Pro
   const [mode, setMode] = useState<ImportMode>('overwrite');
   const [overrides, setOverrides] = useState<Record<number, ColType>>({});
 
+  // Re-sync header/decimal defaults only when a *different* file arrives
+  // while the wizard is open; at first open the persisted prefs win.
+  const firstFile = useMemo(() => `${fileName}\0${text.length}`, []);
   useEffect(() => {
+    if (`${fileName}\0${text.length}` === firstFile) return;
     setDecimalComma(detection.decimalComma);
-  }, [detection.decimalComma]);
+    setHasHeader(detection.hasHeader);
+  }, [fileName, text, detection, firstFile]);
 
   const effDelim: Delimiter = delimId === 'auto' ? detection.delimiter : (DELIMS.find((d) => d.id === delimId)?.char ?? detection.delimiter);
 
