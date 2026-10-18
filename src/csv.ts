@@ -113,7 +113,7 @@ export const csvToTable = (
   return { names, types, rows: normalized };
 };
 
-const escapeField = (value: string, delimiter: string): string => {
+export const escapeField = (value: string, delimiter: string): string => {
   if (value.includes(delimiter) || value.includes('"') || /[\r\n]/.test(value)) {
     return `"${value.replace(/"/g, '""')}"`;
   }

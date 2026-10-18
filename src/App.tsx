@@ -284,7 +284,10 @@ export default function App() {
         const rows = prev.rows.map((r, ri) => {
           const copy = [...r];
           while (copy.length < cols.length) copy.push('');
-          const src = table.rows[ri % Math.max(1, table.rows.length)] ?? [];
+          // Fill only rows covered by the source; never cycle (cycling
+          // would duplicate source rows over unrelated grid data).
+          if (ri >= table.rows.length) return copy;
+          const src = table.rows[ri] ?? [];
           table.names.forEach((_, ti) => {
             const dest = colMap[ti];
             const val = src[ti] ?? '';

@@ -1,4 +1,4 @@
-import { toCsv, trimEmptyRows } from '../csv';
+import { escapeField, toCsv, trimEmptyRows } from '../csv';
 import type { GridData } from '../grid/types';
 import type { Delimiter } from './detect';
 
@@ -48,8 +48,9 @@ export const serializeTable = (
     const arr = converted.map((row) => Object.fromEntries(names.map((n, i) => [n, row[i] ?? ''])));
     return { content: JSON.stringify(arr, null, 2), fileName: 'lazstats.json', mime: 'application/json;charset=utf-8' };
   }
-  const csv = toCsv(opts.includeHeader ? names : names.map(() => ''), converted, delim);
-  const body = opts.includeHeader ? csv : csv.split('\n').slice(1).join('\n');
+  const body = opts.includeHeader
+    ? toCsv(names, converted, delim)
+    : converted.map((row) => names.map((_, i) => escapeField(row[i] ?? '', delim)).join(delim)).join('\n');
   if (opts.format === 'spss') {
     return { content: body, fileName: 'lazstats.csv', mime: 'text/csv;charset=utf-8' };
   }
@@ -67,10 +68,19 @@ export const buildSpsSyntax = (
 ): string => {
   const delim = opts.delimiter === '\t' ? 'TAB' : `'${opts.delimiter}'`;
   const decimal = opts.decimalSeparator === ',' ? 'COMMA' : 'DOT';
-  const vars = names.map((n, i) => {
+  // Sanitized names can collide ("a-b" vs "a b" -> A_B): dedupe to keep
+  // the .sps / CSV column mapping 1:1.
+  const seen = new Map<string, number>();
+  const spsNames = names.map((n) => {
+    const base = sanitizeSpsName(n);
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    return count === 0 ? base : `${base.slice(0, 60)}_${count + 1}`;
+  });
+  const vars = names.map((_, i) => {
     const t = types[i] ?? 'str';
     const fmt = t === 'int' ? 'F8.0' : t === 'dec' || t === 'num' ? 'F12.4' : 'A64';
-    return `  ${sanitizeSpsName(n)} (${fmt})`;
+    return `  ${spsNames[i]} (${fmt})`;
   });
   return [
     `* LazStats export companion. Run in SPSS with the CSV in the same folder.`,
@@ -87,7 +97,7 @@ export const buildSpsSyntax = (
     `  .`,
     `SET DECIMAL ${decimal}.`,
     `VARIABLE LABELS`,
-    names.map((n) => `  ${sanitizeSpsName(n)} "${n.replace(/"/g, "'").slice(0, 120)}"`).join('\n'),
+    names.map((n, i) => `  ${spsNames[i]} "${n.replace(/"/g, "'").slice(0, 120)}"`).join('\n'),
     `  .`,
     `EXECUTE.`,
     ``,

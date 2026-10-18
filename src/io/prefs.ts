@@ -25,7 +25,16 @@ export const loadPrefs = (): IoPreferences => {
     const raw = localStorage.getItem(KEY);
     if (!raw) return { ...DEFAULT_PREFS };
     const parsed = JSON.parse(raw) as Partial<IoPreferences>;
-    return { ...DEFAULT_PREFS, ...parsed };
+    const merged = { ...DEFAULT_PREFS, ...parsed };
+    // Sanitize: corrupted or hand-edited storage must never leak
+    // invalid values into the import/export pipeline.
+    if (!['auto', ',', ';', 'tab', '\t', '|'].includes(merged.delimiter)) merged.delimiter = DEFAULT_PREFS.delimiter;
+    if (merged.decimalSeparator !== '.' && merged.decimalSeparator !== ',') merged.decimalSeparator = DEFAULT_PREFS.decimalSeparator;
+    if (!['csv', 'tsv', 'pipe', 'json', 'spss'].includes(merged.exportFormat)) merged.exportFormat = DEFAULT_PREFS.exportFormat;
+    merged.hasHeader = merged.hasHeader !== false;
+    merged.includeHeader = merged.includeHeader !== false;
+    merged.dropEmptyRows = merged.dropEmptyRows !== false;
+    return merged;
   } catch {
     return { ...DEFAULT_PREFS };
   }

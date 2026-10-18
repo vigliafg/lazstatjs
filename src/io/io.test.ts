@@ -96,4 +96,20 @@ describe('io writers', () => {
     assert.ok(sps.includes('GET DATA'));
     assert.ok(sps.includes('GROUP_NAME'));
   });
+
+  it('dedupes colliding spss names', () => {
+    const sps = buildSpsSyntax('lazstats.csv', ['a-b', 'a b'], ['str', 'str'], {
+      format: 'spss', delimiter: ',', decimalSeparator: '.', includeHeader: true, dropEmptyRows: true,
+    });
+    assert.ok(sps.includes('A_B (A64)'));
+    assert.ok(sps.includes('A_B_2 (A64)'));
+  });
+
+  it('exports without header preserving quoted newlines', () => {
+    const { content } = serializeTable(['A', 'B'], [['line1\nline2', 'x']], {
+      format: 'csv', delimiter: ',', decimalSeparator: '.', includeHeader: false, dropEmptyRows: true,
+    });
+    assert.ok(content.includes('"line1\nline2"'));
+    assert.ok(!content.startsWith(','));
+  });
 });
