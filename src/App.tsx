@@ -65,7 +65,6 @@ import {
   NormalityResult
 } from './statsHelpers';
 import { buildHistogram, pairedValues, parseNum, pooledTTest, welchTTest } from './stats/core';
-import { csvToTable, parseCsv, toCsv, trimEmptyRows } from './csv';
 import type { ColType, GridData } from './grid/types';
 import {
   findInvalid as gridFindInvalid,
@@ -97,6 +96,13 @@ import {
 import { DataGrid } from './grid/DataGrid';
 import { CleanPanel } from './grid/CleanPanel';
 import { TransformPanel } from './grid/TransformPanel';
+import { ImportWizard, type ImportMode } from './io/ImportWizard';
+import { ExportDialog } from './io/ExportDialog';
+import type { ImportTable } from './io/readers';
+import { looksLikeJson } from './io/detect';
+import { readDelimitedTable, readJsonTable } from './io/readers';
+import { downloadText } from './io/writers';
+import { loadPrefs, savePrefs } from './io/prefs';
 
 // --- Types ---
 interface AnalysisConfig {
@@ -237,43 +243,103 @@ export default function App() {
   };
 
   const csvInputRef = useRef<HTMLInputElement>(null);
+  const [pendingImport, setPendingImport] = useState<{ fileName: string; text: string } | null>(null);
+  const [showExport, setShowExport] = useState(false);
+  const [ioPrefs, setIoPrefs] = useState(() => loadPrefs());
+
+  const applyImportTable = (table: ImportTable, mode: ImportMode) => {
+    if (mode === 'overwrite') {
+      resetGridHistory({
+        cols: table.names.map((name, i) => ({ name, type: table.types[i] ?? 'str' })),
+        rows: table.rows.map((row) => [...row]),
+      } as GridData);
+      showToast('Import', `${table.rows.length} rows and ${table.names.length} columns imported`, 'ok');
+    } else if (mode === 'append-rows') {
+      const width = grid.cols.length;
+      const mapped = table.rows.map((row) => {
+        // Align by position when widths match, else by name overlap.
+        if (table.names.length === width) return row.slice(0, width);
+        return grid.cols.map((c) => {
+          const idx = table.names.findIndex((n) => n.toLowerCase() === c.name.toLowerCase());
+          return idx >= 0 ? row[idx] ?? '' : '';
+        });
+      });
+      setGrid((prev) => ({ cols: prev.cols, rows: [...prev.rows, ...mapped] }));
+      showToast('Import', `${mapped.length} rows appended`, 'ok');
+    } else {
+      // Merge columns: add missing names, fill matched columns row-wise.
+      setGrid((prev) => {
+        const existing = new Map(prev.cols.map((c, i) => [c.name.toLowerCase(), i]));
+        const colMap: number[] = [];
+        const cols = [...prev.cols];
+        table.names.forEach((n, ti) => {
+          const at = existing.get(n.toLowerCase());
+          if (at !== undefined) {
+            colMap[ti] = at;
+          } else {
+            colMap[ti] = cols.length;
+            cols.push({ name: n, type: table.types[ti] ?? 'str' });
+          }
+        });
+        const rows = prev.rows.map((r, ri) => {
+          const copy = [...r];
+          while (copy.length < cols.length) copy.push('');
+          const src = table.rows[ri % Math.max(1, table.rows.length)] ?? [];
+          table.names.forEach((_, ti) => {
+            const dest = colMap[ti];
+            const val = src[ti] ?? '';
+            if (val !== '') copy[dest] = val;
+          });
+          return copy;
+        });
+        // Extra source rows beyond grid length extend the grid.
+        for (let ri = prev.rows.length; ri < table.rows.length; ri += 1) {
+          const fresh = new Array(cols.length).fill('');
+          table.names.forEach((_, ti) => {
+            fresh[colMap[ti]] = table.rows[ri][ti] ?? '';
+          });
+          rows.push(fresh);
+        }
+        return { cols, rows };
+      });
+      showToast('Import', `${table.names.length} columns merged`, 'ok');
+    }
+    setPendingImport(null);
+    setValidation({ ran: false, issues: [] });
+    setActiveTab('data');
+  };
 
   const importCsv = async (file: File) => {
     try {
       const text = await file.text();
-      const table = csvToTable(parseCsv(text));
-      if (table.names.length === 0 || table.rows.length === 0) {
-        showToast('Import', 'The file has no data rows', 'warn');
+      if (!text.trim()) {
+        showToast('Import', 'The file is empty', 'warn');
         return;
       }
-      const next = {
-        cols: table.names.map((name, index) => ({ name, type: table.types[index] as ColType })),
-        rows: table.rows.map(row => [...row]),
-      } as GridData;
-      resetGridHistory(next);
-      setActiveTab('data');
-      showToast('Import', `${table.rows.length} rows and ${table.names.length} columns imported`, 'ok');
+      // Fast path: small plain CSV goes straight in; anything ambiguous
+      // (JSON, semicolons, pipes, tabs) opens the wizard.
+      const prefs = loadPrefs();
+      const json = looksLikeJson(text) || file.name.toLowerCase().endsWith('.json');
+      const tricky = json || /[;\t|]/.test(text.slice(0, 2000));
+      if (!tricky && text.length < 200000) {
+        const prefDelim = prefs.delimiter === 'tab' ? '\t' : prefs.delimiter === 'auto' ? ',' : prefs.delimiter;
+        const table = readDelimitedTable(text, {
+          delimiter: prefDelim,
+          hasHeader: prefs.hasHeader,
+          decimalComma: prefs.decimalSeparator === ',',
+        });
+        applyImportTable(table, 'overwrite');
+        return;
+      }
+      setPendingImport({ fileName: file.name, text: text.slice(0, 2000000) });
     } catch (error) {
       console.error(error);
-      showToast('Import', 'Could not read the CSV file', 'error');
+      showToast('Import', error instanceof Error ? error.message : 'Could not read the file', 'error');
     }
   };
 
   const exportCsv = () => {
-    const rows = trimEmptyRows(grid.rows).map(row => grid.cols.map((_, index) => row[index] ?? ''));
-    if (rows.length === 0) {
-      showToast('Export', 'There is nothing to export', 'warn');
-      return;
-    }
-    const csv = toCsv(grid.cols.map(column => column.name), rows);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = 'lazstats.csv';
-    anchor.click();
-    URL.revokeObjectURL(url);
-    showToast('Export', `${rows.length} rows exported`, 'ok');
+    setShowExport(true);
   };
 
   const [descVars, setDescVars] = useState<number[]>([0, 1]);
@@ -2162,8 +2228,8 @@ export default function App() {
             <div className="bg-surface border-b border-border p-1.5 flex items-center gap-2 shrink-0">
               <span className="font-mono text-[10px] text-text3 uppercase tracking-widest px-2">File:</span>
               <button className="tb-btn" onClick={() => resetGridHistory(makeNewGrid())}>New</button>
-              <button className="tb-btn" onClick={() => csvInputRef.current?.click()}>Import CSV</button>
-              <button className="tb-btn" onClick={exportCsv}>Export CSV</button>
+              <button className="tb-btn" onClick={() => csvInputRef.current?.click()}>Import</button>
+              <button className="tb-btn" onClick={exportCsv}>Export</button>
               <div className="h-4 w-px bg-border mx-1" />
               <button className="tb-btn" disabled={!canUndoGrid} onClick={undoGrid} title="Undo (Ctrl+Z)">
                 Undo
@@ -2174,7 +2240,7 @@ export default function App() {
               <input
                 ref={csvInputRef}
                 type="file"
-                accept=".csv,.txt,text/csv,text/plain"
+                accept=".csv,.tsv,.tab,.txt,.json,.psv,text/csv,text/plain,application/json"
                 className="hidden"
                 onChange={(event) => {
                   const file = event.target.files?.[0];
@@ -3006,6 +3072,78 @@ export default function App() {
 
               <section className="bg-surface border border-border rounded-lg p-6">
                 <h2 className="text-accent2 font-mono text-[11px] font-bold uppercase tracking-widest mb-6 pb-2 border-b border-border">
+                  Import / Export
+                </h2>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-text2 text-[12px]">Default delimiter</span>
+                    <select
+                      className="bg-surface3 border border-border2 text-text text-[11px] p-1 rounded min-w-[120px]"
+                      value={ioPrefs.delimiter}
+                      onChange={(e) => {
+                        const next = { ...ioPrefs, delimiter: e.target.value };
+                        setIoPrefs(next);
+                        savePrefs(next);
+                      }}
+                    >
+                      <option value="auto">Auto-detect</option>
+                      <option value=",">Comma (,)</option>
+                      <option value=";">Semicolon (;)</option>
+                      <option value="tab">Tab</option>
+                      <option value="|">Pipe (|)</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-text2 text-[12px]">Decimal separator</span>
+                    <select
+                      className="bg-surface3 border border-border2 text-text text-[11px] p-1 rounded min-w-[120px]"
+                      value={ioPrefs.decimalSeparator}
+                      onChange={(e) => {
+                        const next = { ...ioPrefs, decimalSeparator: e.target.value as '.' | ',' };
+                        setIoPrefs(next);
+                        savePrefs(next);
+                      }}
+                    >
+                      <option value=".">Period (12.5)</option>
+                      <option value=",">Comma (12,5)</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-text2 text-[12px]">Assume first row is header</span>
+                    <input
+                      type="checkbox"
+                      className="accent-accent"
+                      checked={ioPrefs.hasHeader}
+                      onChange={(e) => {
+                        const next = { ...ioPrefs, hasHeader: e.target.checked };
+                        setIoPrefs(next);
+                        savePrefs(next);
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-text2 text-[12px]">Default export format</span>
+                    <select
+                      className="bg-surface3 border border-border2 text-text text-[11px] p-1 rounded min-w-[120px]"
+                      value={ioPrefs.exportFormat}
+                      onChange={(e) => {
+                        const next = { ...ioPrefs, exportFormat: e.target.value };
+                        setIoPrefs(next);
+                        savePrefs(next);
+                      }}
+                    >
+                      <option value="csv">CSV</option>
+                      <option value="tsv">TSV</option>
+                      <option value="pipe">Pipe TXT</option>
+                      <option value="json">JSON</option>
+                      <option value="spss">SPSS (CSV + .sps)</option>
+                    </select>
+                  </div>
+                </div>
+              </section>
+
+              <section className="bg-surface border border-border rounded-lg p-6">
+                <h2 className="text-accent2 font-mono text-[11px] font-bold uppercase tracking-widest mb-6 pb-2 border-b border-border">
                   Output Settings
                 </h2>
                 <div className="space-y-4">
@@ -3023,6 +3161,27 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {pendingImport && (
+        <ImportWizard
+          fileName={pendingImport.fileName}
+          text={pendingImport.text}
+          gridCols={grid.cols.map((c) => c.name)}
+          onClose={() => setPendingImport(null)}
+          onApply={applyImportTable}
+        />
+      )}
+      {showExport && (
+        <ExportDialog
+          grid={grid}
+          onClose={() => setShowExport(false)}
+          onExport={(files) => {
+            files.forEach((f) => downloadText(f.content, f.fileName, f.mime));
+            setShowExport(false);
+            showToast('Export', files.map((f) => f.fileName).join(' + '), 'ok');
+          }}
+        />
+      )}
 
       {/* Footer / Statusbar */}
       <footer className="h-8 bg-surface border-t border-border flex items-center px-4 text-[10px] font-mono text-text3 gap-6 shrink-0">

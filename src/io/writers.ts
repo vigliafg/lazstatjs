@@ -1,0 +1,111 @@
+import { toCsv, trimEmptyRows } from '../csv';
+import type { GridData } from '../grid/types';
+import type { Delimiter } from './detect';
+
+export type ExportFormat = 'csv' | 'tsv' | 'pipe' | 'json' | 'spss';
+
+export interface ExportOptions {
+  format: ExportFormat;
+  delimiter: Delimiter;
+  decimalSeparator: '.' | ',';
+  includeHeader: boolean;
+  dropEmptyRows: boolean;
+}
+
+export const DEFAULT_EXPORT: ExportOptions = {
+  format: 'csv',
+  delimiter: ',',
+  decimalSeparator: '.',
+  includeHeader: true,
+  dropEmptyRows: true,
+};
+
+const formatFor = (format: ExportFormat): Delimiter => {
+  if (format === 'tsv') return '\t';
+  if (format === 'pipe') return '|';
+  return ',';
+};
+
+const applyDecimals = (value: string, decimalSeparator: '.' | ','): string => {
+  if (decimalSeparator === '.') return value;
+  // Only rewrite plain dot-decimals, leave dates/text alone.
+  return /^-?\d+\.\d+(e[+-]?\d+)?$/i.test(value.trim()) ? value.trim().replace('.', ',') : value;
+};
+
+export const gridToRows = (grid: GridData, dropEmpty: boolean): string[][] => {
+  const rows = grid.rows.map((row) => grid.cols.map((_, i) => row[i] ?? ''));
+  return dropEmpty ? trimEmptyRows(rows) : rows;
+};
+
+export const serializeTable = (
+  names: string[],
+  rows: string[][],
+  opts: ExportOptions
+): { content: string; fileName: string; mime: string } => {
+  const delim = opts.format === 'csv' || opts.format === 'spss' ? opts.delimiter : formatFor(opts.format);
+  const converted = rows.map((row) => row.map((v) => applyDecimals(v, opts.decimalSeparator)));
+  if (opts.format === 'json') {
+    const arr = converted.map((row) => Object.fromEntries(names.map((n, i) => [n, row[i] ?? ''])));
+    return { content: JSON.stringify(arr, null, 2), fileName: 'lazstats.json', mime: 'application/json;charset=utf-8' };
+  }
+  const csv = toCsv(opts.includeHeader ? names : names.map(() => ''), converted, delim);
+  const body = opts.includeHeader ? csv : csv.split('\n').slice(1).join('\n');
+  if (opts.format === 'spss') {
+    return { content: body, fileName: 'lazstats.csv', mime: 'text/csv;charset=utf-8' };
+  }
+  const ext = opts.format === 'tsv' ? 'tsv' : opts.format === 'pipe' ? 'txt' : 'csv';
+  const mime = opts.format === 'tsv' ? 'text/tab-separated-values;charset=utf-8' : 'text/csv;charset=utf-8';
+  return { content: body, fileName: `lazstats.${ext}`, mime };
+};
+
+/** Minimal SPSS companion: GET DATA + VARIABLE LABELS + FORMATS. */
+export const buildSpsSyntax = (
+  csvFileName: string,
+  names: string[],
+  types: string[],
+  opts: ExportOptions
+): string => {
+  const delim = opts.delimiter === '\t' ? 'TAB' : `'${opts.delimiter}'`;
+  const decimal = opts.decimalSeparator === ',' ? 'COMMA' : 'DOT';
+  const vars = names.map((n, i) => {
+    const t = types[i] ?? 'str';
+    const fmt = t === 'int' ? 'F8.0' : t === 'dec' || t === 'num' ? 'F12.4' : 'A64';
+    return `  ${sanitizeSpsName(n)} (${fmt})`;
+  });
+  return [
+    `* LazStats export companion. Run in SPSS with the CSV in the same folder.`,
+    `GET DATA /TYPE=TXT`,
+    `  /FILE="${csvFileName}"`,
+    `  /ENCODING="UTF8"`,
+    `  /ARRANGEMENT=DELIMITED`,
+    `  /DELCASE=LINE`,
+    `  /DELIMITERS=${delim}`,
+    `  /QUALIFIER='"'`,
+    `  /FIRSTCASE=${opts.includeHeader ? 2 : 1}`,
+    `  /VARIABLES=`,
+    vars.join('\n'),
+    `  .`,
+    `SET DECIMAL ${decimal}.`,
+    `VARIABLE LABELS`,
+    names.map((n) => `  ${sanitizeSpsName(n)} "${n.replace(/"/g, "'").slice(0, 120)}"`).join('\n'),
+    `  .`,
+    `EXECUTE.`,
+    ``,
+  ].join('\n');
+};
+
+const sanitizeSpsName = (name: string): string => {
+  let s = name.trim().replace(/[^A-Za-z0-9_]/g, '_');
+  if (/^[0-9]/.test(s)) s = `V_${s}`;
+  return (s || 'VAR').slice(0, 64).toUpperCase();
+};
+
+export const downloadText = (content: string, fileName: string, mime: string): void => {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+};
