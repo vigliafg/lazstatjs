@@ -200,10 +200,22 @@ export const coerceValue = (val: string, type: ColType): string => {
     return val;
   }
   if (type === 'num' || type === 'int' || type === 'dec') {
-    const dot = t.replace(',', '.');
+    // 'num' is the permissive auto-detect column: only trim, never rewrite.
+    if (type === 'num') return t === val ? val : t;
+    let dot = t;
+    // Handle thousands + decimal comma ("1.234,56") vs plain decimal comma ("1,5").
+    const hasComma = dot.includes(',');
+    const hasDot = dot.includes('.');
+    if (hasComma && hasDot) {
+      const lastComma = dot.lastIndexOf(',');
+      const lastDot = dot.lastIndexOf('.');
+      dot = lastComma > lastDot ? dot.replace(/\./g, '').replace(',', '.') : dot.replace(/,/g, '');
+    } else if (hasComma) {
+      dot = dot.replace(',', '.');
+    }
     if (type === 'int') {
       const n = Number(dot);
-      if (Number.isInteger(n)) return String(n);
+      if (dot.trim() !== '' && Number.isInteger(n)) return String(n);
       return val;
     }
     if (/^-?\d*\.?\d+(e[+-]?\d+)?$/i.test(dot)) return dot;
@@ -248,7 +260,8 @@ export const findReplace = (
       if (opts.col !== null && opts.col !== undefined && c !== opts.col) return cell;
       const v = cell ?? '';
       if (re) {
-        const next = v.replace(re, replace);
+        // '$$' in the replacement would otherwise insert a literal '$'.
+        const next = v.replace(re, () => replace);
         if (next !== v) count += 1;
         return next;
       }
@@ -292,8 +305,9 @@ export const removeDuplicateRows = (grid: GridData): { grid: GridData; removed: 
   const seen = new Set<string>();
   const kept: string[][] = [];
   grid.rows.forEach((r) => {
-    const key = JSON.stringify(r.map((v) => String(v ?? '').trim()));
-    const empty = r.every((v) => String(v ?? '').trim() === '');
+    const full = grid.cols.map((_, i) => String(r[i] ?? '').trim());
+    const key = JSON.stringify(full);
+    const empty = full.every((v) => v === '');
     if (empty || !seen.has(key)) {
       if (!empty) seen.add(key);
       kept.push(r);

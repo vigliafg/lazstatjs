@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   addColumnEnd, insertColumnAt, duplicateColumn, moveColumn, deleteColumn,
   insertRowAt, deleteRow, clearGrid, pasteTsvAt, parseTsv, fillDownRange,
-  coerceGrid, findReplace, trimGrid, removeEmptyRows, removeDuplicateRows,
+  coerceGrid, coerceValue, findReplace, trimGrid, removeEmptyRows, removeDuplicateRows,
   fillMissing, findInvalid, sortByColumn, recodeColumn, splitColumn,
   mergeColumns, computeColumn,
 } from './ops';
@@ -135,5 +135,28 @@ describe('grid ops foundation', () => {
   it('deleteRow keeps at least one row', () => {
     const g: GridData = { cols: [{ name: 'A', type: 'str' }], rows: [['a']] };
     assert.equal(deleteRow(g, 0).rows.length, 1);
+  });
+
+  it('coerce handles num trim-only and thousands', () => {
+    assert.equal(coerceValue('  12  ', 'num'), '12');
+    assert.equal(coerceValue('1,5', 'num'), '1,5');
+    assert.equal(coerceValue('1.234,56', 'dec'), '1234.56');
+    assert.equal(coerceValue('1,234.56', 'dec'), '1234.56');
+    assert.equal(coerceValue(' 3 ', 'int'), '3');
+  });
+
+  it('regex replacement treats $ literally', () => {
+    const g: GridData = { cols: [{ name: 'A', type: 'str' }], rows: [['abc']] };
+    const { grid, count } = findReplace(g, 'b', '$$', { regex: true });
+    assert.equal(count, 1);
+    assert.equal(grid.rows[0][0], 'a$$c');
+  });
+
+  it('dedupe normalizes ragged rows', () => {
+    const g: GridData = {
+      cols: [{ name: 'A', type: 'str' }, { name: 'B', type: 'str' }],
+      rows: [['x'], ['x', '']],
+    };
+    assert.equal(removeDuplicateRows(g).removed, 1);
   });
 });

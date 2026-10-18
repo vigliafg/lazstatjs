@@ -147,6 +147,13 @@ export default function App() {
   const [selRange, setSelRange] = useState<{ r0: number; c0: number; r1: number; c1: number } | null>(null);
   const [showClean, setShowClean] = useState(false);
   const [showTransform, setShowTransform] = useState(false);
+  // Keep a validation run live: recompute counts/jump targets as the user
+  // fixes cells instead of showing stale indexes.
+  useEffect(() => {
+    if (!validation.ran) return;
+    setValidation({ ran: true, issues: gridFindInvalid(grid) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grid]);
   // Selection bar holds raw indexes: clamp them after delete/merge/paste so
   // Fill/Copy/Clear never address rows/cols that no longer exist.
   useEffect(() => {
