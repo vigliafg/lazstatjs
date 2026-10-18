@@ -255,17 +255,21 @@ export default function App() {
       } as GridData);
       showToast('Import', `${table.rows.length} rows and ${table.names.length} columns imported`, 'ok');
     } else if (mode === 'append-rows') {
-      const width = grid.cols.length;
-      const mapped = table.rows.map((row) => {
-        // Align by position when widths match, else by name overlap.
-        if (table.names.length === width) return row.slice(0, width);
-        return grid.cols.map((c) => {
-          const idx = table.names.findIndex((n) => n.toLowerCase() === c.name.toLowerCase());
-          return idx >= 0 ? row[idx] ?? '' : '';
+      // Compute inside the updater: the wizard may have been open while
+      // the grid changed, so the render-closure `grid` can be stale.
+      setGrid((prev) => {
+        const width = prev.cols.length;
+        const mapped = table.rows.map((row) => {
+          // Align by position when widths match, else by name overlap.
+          if (table.names.length === width) return row.slice(0, width).concat(new Array(Math.max(0, width - row.length)).fill(''));
+          return prev.cols.map((c) => {
+            const idx = table.names.findIndex((n) => n.toLowerCase() === c.name.toLowerCase());
+            return idx >= 0 ? row[idx] ?? '' : '';
+          });
         });
+        return { cols: prev.cols, rows: [...prev.rows, ...mapped] };
       });
-      setGrid((prev) => ({ cols: prev.cols, rows: [...prev.rows, ...mapped] }));
-      showToast('Import', `${mapped.length} rows appended`, 'ok');
+      showToast('Import', `${table.rows.length} rows appended`, 'ok');
     } else {
       // Merge columns: add missing names, fill matched columns row-wise.
       setGrid((prev) => {
