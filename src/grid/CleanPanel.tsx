@@ -23,7 +23,8 @@ export function CleanPanel({ grid, onApply }: Props) {
     const max = Math.max(0, grid.cols.length - 1);
     if (fillCol > max) setFillCol(max);
     if (typeof scopeCol === 'number' && scopeCol > max) setScopeCol(max);
-  }, [grid.cols.length, fillCol, scopeCol]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grid.cols.length]);
 
   const runFindReplace = () => {
     const { grid: next, count } = findReplace(grid, search, replace, {

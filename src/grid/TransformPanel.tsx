@@ -28,7 +28,8 @@ export function TransformPanel({ grid, onApply }: Props) {
     if (splitCol > max) setSplitCol(max);
     if (mergeA > max) setMergeA(max);
     if (mergeB > max) setMergeB(Math.min(max, 1));
-  }, [grid.cols.length, sortCol, recodeCol, splitCol, mergeA, mergeB]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grid.cols.length]);
 
   const parseMapping = (): Record<string, string> => {
     const map: Record<string, string> = {};

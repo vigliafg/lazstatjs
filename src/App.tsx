@@ -147,6 +147,23 @@ export default function App() {
   const [selRange, setSelRange] = useState<{ r0: number; c0: number; r1: number; c1: number } | null>(null);
   const [showClean, setShowClean] = useState(false);
   const [showTransform, setShowTransform] = useState(false);
+  // Selection bar holds raw indexes: clamp them after delete/merge/paste so
+  // Fill/Copy/Clear never address rows/cols that no longer exist.
+  useEffect(() => {
+    if (!selRange) return;
+    const maxR = Math.max(0, grid.rows.length - 1);
+    const maxC = Math.max(0, grid.cols.length - 1);
+    const clamp = (v: number, m: number) => Math.max(0, Math.min(m, v));
+    const next = {
+      r0: clamp(selRange.r0, maxR),
+      c0: clamp(selRange.c0, maxC),
+      r1: clamp(selRange.r1, maxR),
+      c1: clamp(selRange.c1, maxC),
+    };
+    if (next.r0 !== selRange.r0 || next.c0 !== selRange.c0 || next.r1 !== selRange.r1 || next.c1 !== selRange.c1) {
+      setSelRange(next);
+    }
+  }, [grid.rows.length, grid.cols.length, selRange]);
   const [validation, setValidation] = useState<{ ran: boolean; issues: { r: number; c: number; value: string; colName: string }[] }>({
     ran: false,
     issues: [],
@@ -2294,7 +2311,7 @@ export default function App() {
                 setGrid((prev) => gridDeleteRow(prev, r));
               }}
               onPaste={(r, c, text) => {
-                const block = parseTsvBlock(text).filter((line) => line.some((v) => v !== ''));
+                const block = parseTsvBlock(text).filter((line) => line.some((v) => String(v ?? '').trim() !== ''));
                 if (block.length === 0) return;
                 setGrid((prev) => gridPasteTsv(prev, r, c, block));
                 showToast('Paste', `${block.length}x${Math.max(...block.map((l) => l.length))} cells pasted`, 'ok');
