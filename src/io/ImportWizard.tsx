@@ -26,7 +26,9 @@ export function ImportWizard({ fileName, text, gridCols, onApply, onClose }: Pro
   const detection: Detection = useMemo(() => detectFormat(fileName, text), [fileName, text]);
   const isJson = useMemo(() => looksLikeJson(text) || fileName.toLowerCase().endsWith('.json'), [text, fileName]);
   const prefs = useMemo(() => loadPrefs(), []);
-  const [delimId, setDelimId] = useState<string>(prefs.delimiter);
+  const [delimId, setDelimId] = useState<string>(() =>
+    prefs.delimiter === '\t' ? 'tab' : ['auto', ',', ';', 'tab', '|'].includes(prefs.delimiter) ? prefs.delimiter : 'auto'
+  );
   const [hasHeader, setHasHeader] = useState<boolean>(prefs.hasHeader);
   const [decimalComma, setDecimalComma] = useState<boolean>(detection.decimalComma);
   const [mode, setMode] = useState<ImportMode>('overwrite');

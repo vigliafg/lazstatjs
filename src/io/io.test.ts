@@ -112,4 +112,18 @@ describe('io writers', () => {
     assert.ok(content.includes('"line1\nline2"'));
     assert.ok(!content.startsWith(','));
   });
+
+  it('keeps a forced numeric header as names', () => {
+    const t = readDelimitedTable('2020,2021\n1,2\n3,4\n', { delimiter: ',', hasHeader: true });
+    assert.deepEqual(t.names, ['2020', '2021']);
+    assert.equal(t.rows.length, 2);
+    assert.deepEqual(t.types, ['int', 'int']);
+  });
+
+  it('pads ragged rows to full width', () => {
+    const t = readDelimitedTable('A,B,C\n1,2\n3,4,5,6\n', { delimiter: ',', hasHeader: true });
+    assert.deepEqual(t.names, ['A', 'B', 'C', 'Var4']);
+    assert.equal(t.rows[0][2], '');
+    assert.equal(t.rows[1][3], '6');
+  });
 });

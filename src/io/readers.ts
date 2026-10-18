@@ -1,4 +1,4 @@
-import { parseCsv, csvToTable, inferColumnType, type InferredType } from '../csv';
+import { parseCsv, inferColumnType, type InferredType } from '../csv';
 import type { ColType } from '../grid/types';
 import type { Delimiter } from './detect';
 
@@ -58,22 +58,21 @@ export const toImportTable = (
   rows: string[][],
   opts: { hasHeader: boolean; decimalComma?: boolean; typeOverrides?: Record<number, ColType>; skippedEmpty?: number }
 ): ImportTable => {
-  const width = Math.max(names.length, 0, ...rows.map((r) => r.length));
+  // The caller's header decision is authoritative: never re-detect.
+  // csvToTable's probe is bypassed entirely (it misfires on numeric
+  // headers and corrupts the headerless first data row).
+  const bodyRaw = rows.map((r) => r.map((c) => String(c ?? '')));
+  const width = Math.max(names.length, 0, ...bodyRaw.map((r) => r.length));
   if (width > MAX_COLS) throw new Error(`Too many columns (${width} > ${MAX_COLS})`);
-  if (rows.length > MAX_ROWS) throw new Error(`Too many rows (${rows.length} > ${MAX_ROWS})`);
-  const padded = rows.map((r) => Array.from({ length: width }, (_, i) => String(r[i] ?? '')));
-  const table = csvToTable(opts.hasHeader ? [names, ...padded] : padded.map((r, i) => (i === 0 && names.length ? names.map((n, j) => r[j] ?? n) : r)));
-  // csvToTable re-detects the header; when the caller already decided, rebuild directly.
-  let finalNames = table.names;
-  let body = table.rows;
-  if (!opts.hasHeader) {
-    finalNames = Array.from({ length: width }, (_, i) => `Var${i + 1}`);
-    body = padded;
-  }
+  if (bodyRaw.length > MAX_ROWS) throw new Error(`Too many rows (${bodyRaw.length} > ${MAX_ROWS})`);
+  const baseNames = opts.hasHeader
+    ? Array.from({ length: width }, (_, i) => names[i] ?? `Var${i + 1}`)
+    : Array.from({ length: width }, (_, i) => `Var${i + 1}`);
+  const padded = bodyRaw.map((r) => Array.from({ length: width }, (_, i) => r[i] ?? ''));
   // Dedupe headers case-insensitively.
   const seen = new Map<string, number>();
   let renamedDupes = 0;
-  finalNames = finalNames.map((n) => {
+  const finalNames = baseNames.map((n) => {
     const base = (n.trim() || 'Var').slice(0, 60);
     const key = base.toLowerCase();
     const count = seen.get(key) ?? 0;
@@ -82,21 +81,18 @@ export const toImportTable = (
     renamedDupes += 1;
     return `${base}_${count + 1}`;
   });
-  // Re-infer via csvToTable types when available, else fallback.
-  // Headerless path: csvToTable's probe corrupts the first data row, so
-  // infer directly from the real body.
+  // Infer directly from the real body in both paths.
   const types: ColType[] = finalNames.map((_, i) => {
     const override = opts.typeOverrides?.[i];
     if (override) return override;
-    if (!opts.hasHeader) return toColType(inferColumnType(body.map((row) => row[i] ?? '')));
-    return toColType(table.types[i] ?? 'str');
+    return toColType(inferColumnType(padded.map((row) => row[i] ?? '')));
   });
   // Decimal comma normalization for numeric columns.
   const numeric = types.map((t) => t === 'dec' || t === 'num');
   const normalized = (opts.decimalComma ?? true)
-    ? body.map((row) => row.map((cell, i) => (numeric[i] && cell.includes(',') ? cell.trim().replace(/\./g, '').replace(',', '.') : cell)))
-    : body;
-  const skippedEmpty = opts.skippedEmpty ?? Math.max(0, rows.length - padded.filter((r) => r.some((v) => v.trim() !== '')).length);
+    ? padded.map((row) => row.map((cell, i) => (numeric[i] && cell.includes(',') ? cell.trim().replace(/\./g, '').replace(',', '.') : cell)))
+    : padded;
+  const skippedEmpty = opts.skippedEmpty ?? 0;
   return { names: finalNames, types, rows: normalized, skippedEmpty, renamedDupes };
 };
 

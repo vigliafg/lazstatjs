@@ -116,6 +116,11 @@ export const downloadText = (content: string, fileName: string, mime: string): v
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = fileName;
+  // Firefox requires the anchor in the DOM for click() to trigger.
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  anchor.remove();
+  // Revoke on next tick so the download can start first.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
