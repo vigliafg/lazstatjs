@@ -66,7 +66,7 @@ export const buildSpsSyntax = (
   types: string[],
   opts: ExportOptions
 ): string => {
-  const delim = opts.delimiter === '\t' ? 'TAB' : `'${opts.delimiter}'`;
+  const delim = opts.delimiter === '\t' ? 'TAB' : `"${opts.delimiter}"`;
   const decimal = opts.decimalSeparator === ',' ? 'COMMA' : 'DOT';
   // Sanitized names can collide ("a-b" vs "a b" -> A_B): dedupe to keep
   // the .sps / CSV column mapping 1:1.

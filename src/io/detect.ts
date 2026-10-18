@@ -120,10 +120,11 @@ export const looksLikeJson = (text: string): boolean => {
 export const detectFormat = (fileName: string, text: string): Detection => {
   const { hadBOM } = stripBOM(text);
   const lower = fileName.toLowerCase();
+  const json = looksLikeJson(text);
+  const { delimiter: detected, scores } = detectDelimiter(text);
   let delimiter: Delimiter = ',';
   if (lower.endsWith('.tsv') || lower.endsWith('.tab')) delimiter = '\t';
-  else if (!looksLikeJson(text)) delimiter = detectDelimiter(text).delimiter;
-  const { scores } = detectDelimiter(text);
+  else if (!json) delimiter = detected;
   // Cheap parse of first rows for header detection.
   const lines = sampleLines(stripBOM(text).text, 10).map((l) => splitLine(l, delimiter));
   const { hasHeader, confidence } = detectHeader(lines);

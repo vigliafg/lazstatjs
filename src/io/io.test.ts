@@ -126,4 +126,14 @@ describe('io writers', () => {
     assert.equal(t.rows[0][2], '');
     assert.equal(t.rows[1][3], '6');
   });
+
+  it('rejects empty json arrays', () => {
+    assert.throws(() => readJsonTable('[]'), /No data rows/);
+  });
+
+  it('pads ragged json arrays', () => {
+    const t = readJsonTable('[[1,2],[3]]');
+    assert.deepEqual(t.names, ['Var1', 'Var2']);
+    assert.equal(t.rows[1][1], '');
+  });
 });

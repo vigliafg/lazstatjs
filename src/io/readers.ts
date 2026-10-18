@@ -36,6 +36,7 @@ const flatten = (value: unknown): string => {
 /** Accept array-of-objects, array-of-arrays, or {columns, data}. */
 export const readJson = (text: string): { names: string[]; rows: string[][] } => {
   const parsed: unknown = JSON.parse(text);
+  if (Array.isArray(parsed) && parsed.length === 0) throw new Error('No data rows found');
   if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object' && !Array.isArray(parsed[0])) {
     const objs = parsed as Record<string, unknown>[];
     const names = [...new Set(objs.flatMap((o) => Object.keys(o)))];
@@ -43,7 +44,8 @@ export const readJson = (text: string): { names: string[]; rows: string[][] } =>
   }
   if (Array.isArray(parsed) && parsed.every((r) => Array.isArray(r))) {
     const arr = parsed as unknown[][];
-    return { names: arr[0].map((_, i) => `Var${i + 1}`), rows: arr.map((r) => r.map(flatten)) };
+    const width = Math.max(0, ...arr.map((r) => r.length));
+    return { names: Array.from({ length: width }, (_, i) => `Var${i + 1}`), rows: arr.map((r) => Array.from({ length: width }, (_, i) => flatten(r[i]))) };
   }
   if (parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>).columns) && Array.isArray((parsed as Record<string, unknown>).data)) {
     const p = parsed as { columns: unknown[]; data: unknown[][] };
