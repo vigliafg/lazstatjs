@@ -144,15 +144,28 @@ export const pasteTsvAt = (grid: GridData, r0: number, c0: number, block: string
 
 export const clearRange = (grid: GridData, range: Range): GridData => {
   const { r0, c0, r1, c1 } = normRange(range);
-  return { cols: grid.cols, rows: grid.rows.map((row, r) => (r < r0 || r > r1 ? [...row] : row.map((v, c) => (c >= c0 && c <= c1 ? '' : v)))) };
+  // Preserve ragged row widths: only touch cells that exist.
+  return {
+    cols: grid.cols,
+    rows: grid.rows.map((row, r) =>
+      r < r0 || r > r1 ? [...row] : row.map((v, c) => (c >= c0 && c <= c1 ? '' : v))
+    ),
+  };
 };
 
 export const fillDownRange = (grid: GridData, range: Range): GridData => {
   const { r0, c0, r1, c1 } = normRange(range);
+  if (grid.rows.length === 0 || grid.cols.length === 0) return grid;
+  const ar0 = Math.max(0, Math.min(grid.rows.length - 1, r0));
+  const ar1 = Math.max(0, Math.min(grid.rows.length - 1, r1));
+  const ac0 = Math.max(0, Math.min(grid.cols.length - 1, c0));
+  const ac1 = Math.max(0, Math.min(grid.cols.length - 1, c1));
   const rows = grid.rows.map((r) => [...r]);
-  for (let c = c0; c <= c1; c += 1) {
-    const top = rows[r0]?.[c] ?? '';
-    for (let r = r0 + 1; r <= r1; r += 1) rows[r][c] = top;
+  for (let c = ac0; c <= ac1; c += 1) {
+    const top = rows[ar0]?.[c] ?? '';
+    for (let r = ar0 + 1; r <= ar1; r += 1) {
+      if (c < rows[r].length) rows[r][c] = top;
+    }
   }
   return { cols: grid.cols, rows };
 };

@@ -11,8 +11,16 @@ const clone = (g: GridData): GridData => ({
 const sameGrid = (a: GridData, b: GridData): boolean =>
   a.cols.length === b.cols.length &&
   a.rows.length === b.rows.length &&
-  a.cols.every((c, i) => c.name === b.cols[i].name && c.type === b.cols[i].type) &&
-  a.rows.every((r, i) => r.length === b.rows[i].length && r.every((v, j) => v === b.rows[i][j]));
+  a.cols.every((c, i) => c.name === b.cols[i]?.name && c.type === b.cols[i]?.type) &&
+  a.rows.every((r, i) => {
+    const other = b.rows[i] ?? [];
+    // Ragged rows from legacy states: compare up to the widest row.
+    const width = Math.max(r.length, other.length);
+    for (let j = 0; j < width; j += 1) {
+      if ((r[j] ?? '') !== (other[j] ?? '')) return false;
+    }
+    return true;
+  });
 
 /** Undo/redo stack for the data grid. Call `commit(next)` instead of setState. */
 export function useGridHistory(initial: GridData) {

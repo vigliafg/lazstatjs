@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   addColumnEnd, insertColumnAt, duplicateColumn, moveColumn, deleteColumn,
-  insertRowAt, deleteRow, clearGrid, pasteTsvAt, parseTsv, fillDownRange,
+  insertRowAt, deleteRow, clearGrid, pasteTsvAt, parseTsv, fillDownRange, clearRange,
   coerceGrid, coerceValue, findReplace, trimGrid, removeEmptyRows, removeDuplicateRows,
   fillMissing, findInvalid, sortByColumn, recodeColumn, splitColumn,
   mergeColumns, computeColumn,
@@ -182,5 +182,32 @@ describe('grid ops foundation', () => {
     const out = mergeColumns(g, 0, 1, ';', 'A');
     assert.equal(out.cols[0].name, 'A');
     assert.equal(out.rows[0][0], 'x;y');
+  });
+
+  it('fill down clamps out-of-range selection', () => {
+    const g: GridData = {
+      cols: [{ name: 'A', type: 'str' }],
+      rows: [['top'], ['']],
+    };
+    const out = fillDownRange(g, { r0: 0, c0: 0, r1: 99, c1: 99 });
+    assert.equal(out.rows[1][0], 'top');
+  });
+
+  it('fill down preserves ragged row width', () => {
+    const g: GridData = {
+      cols: [{ name: 'A', type: 'str' }, { name: 'B', type: 'str' }],
+      rows: [['top', 't2'], ['x']],
+    };
+    const out = fillDownRange(g, { r0: 0, c0: 0, r1: 1, c1: 1 });
+    assert.deepEqual(out.rows[1], ['top']);
+  });
+
+  it('clear range preserves ragged row width', () => {
+    const g: GridData = {
+      cols: [{ name: 'A', type: 'str' }, { name: 'B', type: 'str' }],
+      rows: [['a', 'b'], ['c']],
+    };
+    const out = clearRange(g, { r0: 0, c0: 0, r1: 5, c1: 5 });
+    assert.deepEqual(out.rows[1], ['']);
   });
 });
