@@ -13,9 +13,15 @@ interface Props {
 
 export function ExportDialog({ grid, onClose, onExport }: Props) {
   const prefs = useMemo(() => loadPrefs(), []);
-  const [format, setFormat] = useState<ExportFormat>((prefs.exportFormat as ExportFormat) ?? 'csv');
+  const [format, setFormat] = useState<ExportFormat>(
+    (['csv', 'tsv', 'pipe', 'json', 'spss'] as ExportFormat[]).includes(prefs.exportFormat as ExportFormat)
+      ? (prefs.exportFormat as ExportFormat)
+      : 'csv'
+  );
   const [delimiter, setDelimiter] = useState<Delimiter>(
-    prefs.delimiter === 'auto' ? ',' : ((prefs.delimiter as Delimiter) ?? ',')
+    prefs.delimiter === 'tab' || prefs.delimiter === '\t'
+      ? '\t'
+      : ([';', '|', ','].includes(prefs.delimiter) ? (prefs.delimiter as Delimiter) : ',')
   );
   const [decimalSeparator, setDecimalSeparator] = useState<'.' | ','>(prefs.decimalSeparator);
   const [includeHeader, setIncludeHeader] = useState(prefs.includeHeader);

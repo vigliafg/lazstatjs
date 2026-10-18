@@ -31,7 +31,6 @@ export function ImportWizard({ fileName, text, gridCols, onApply, onClose }: Pro
   const [decimalComma, setDecimalComma] = useState<boolean>(detection.decimalComma);
   const [mode, setMode] = useState<ImportMode>('overwrite');
   const [overrides, setOverrides] = useState<Record<number, ColType>>({});
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setDecimalComma(detection.decimalComma);
@@ -39,28 +38,15 @@ export function ImportWizard({ fileName, text, gridCols, onApply, onClose }: Pro
 
   const effDelim: Delimiter = delimId === 'auto' ? detection.delimiter : (DELIMS.find((d) => d.id === delimId)?.char ?? detection.delimiter);
 
-  const table: ImportTable | null = useMemo(() => {
+  const parsed: { table: ImportTable | null; error: string | null } = useMemo(() => {
     try {
-      if (isJson) return readJsonTable(text, { decimalComma, typeOverrides: overrides });
-      return readDelimitedTable(text, { delimiter: effDelim, hasHeader, decimalComma, typeOverrides: overrides });
-    } catch {
-      return null;
+      if (isJson) return { table: readJsonTable(text, { decimalComma, typeOverrides: overrides }), error: null };
+      return { table: readDelimitedTable(text, { delimiter: effDelim, hasHeader, decimalComma, typeOverrides: overrides }), error: null };
+    } catch (e) {
+      return { table: null, error: e instanceof Error ? e.message : 'Cannot parse file' };
     }
   }, [isJson, text, effDelim, hasHeader, decimalComma, overrides]);
-
-  useEffect(() => {
-    if (!table) {
-      try {
-        if (isJson) readJsonTable(text, { decimalComma });
-        else readDelimitedTable(text, { delimiter: effDelim, hasHeader, decimalComma });
-        setError(null);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Cannot parse file');
-      }
-    } else {
-      setError(null);
-    }
-  }, [table, isJson, text, effDelim, hasHeader, decimalComma]);
+  const { table, error } = parsed;
 
   const preview = table ? table.rows.slice(0, 10) : [];
 

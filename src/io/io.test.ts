@@ -50,6 +50,24 @@ describe('io readers', () => {
     assert.equal(t.rows[1][1], '');
   });
 
+  it('infers numeric types without header', () => {
+    const t = readDelimitedTable('1,2.5\n3,4.5\n', { delimiter: ',', hasHeader: false });
+    assert.deepEqual(t.names, ['Var1', 'Var2']);
+    assert.deepEqual(t.types, ['int', 'dec']);
+    assert.equal(t.rows.length, 2);
+  });
+
+  it('maps tab id to tab character', () => {
+    const t = readDelimitedTable('A\tB\n1\t2\n', { delimiter: 'tab', hasHeader: true });
+    assert.deepEqual(t.names, ['A', 'B']);
+  });
+
+  it('counts skipped empty rows', () => {
+    const t = readDelimitedTable('A,B\n1,2\n\n3,4\n', { delimiter: ',', hasHeader: true });
+    assert.equal(t.skippedEmpty, 1);
+    assert.equal(t.rows.length, 2);
+  });
+
   it('rejects oversized input', () => {
     const wide = [new Array(501).fill('1').join(',')].join('\n');
     assert.throws(() => readDelimitedTable(wide, { delimiter: ',', hasHeader: false }), /Too many columns/);

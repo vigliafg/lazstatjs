@@ -1,4 +1,4 @@
-import { parseCsv, csvToTable, type InferredType } from '../csv';
+import { parseCsv, csvToTable, inferColumnType, type InferredType } from '../csv';
 import type { ColType } from '../grid/types';
 import type { Delimiter } from './detect';
 
@@ -20,8 +20,8 @@ export const readDelimited = (
   text: string,
   opts: { delimiter: Delimiter | string; hasHeader: boolean; decimalComma?: boolean }
 ): { rows: string[][]; skippedEmpty: number } => {
-  const delim = opts.delimiter === '\t' ? '\t' : (opts.delimiter as string);
-  const rows = parseCsv(text, delim === '|' ? '|' : delim);
+  const delim = opts.delimiter === 'tab' ? '\t' : (opts.delimiter as string);
+  const rows = parseCsv(text, delim, { keepEmpty: true });
   const before = rows.length;
   const kept = rows.filter((r) => r.some((v) => v.trim() !== ''));
   return { rows: kept, skippedEmpty: before - kept.length };
@@ -56,7 +56,7 @@ export const readJson = (text: string): { names: string[]; rows: string[][] } =>
 export const toImportTable = (
   names: string[],
   rows: string[][],
-  opts: { hasHeader: boolean; decimalComma?: boolean; typeOverrides?: Record<number, ColType> }
+  opts: { hasHeader: boolean; decimalComma?: boolean; typeOverrides?: Record<number, ColType>; skippedEmpty?: number }
 ): ImportTable => {
   const width = Math.max(names.length, 0, ...rows.map((r) => r.length));
   if (width > MAX_COLS) throw new Error(`Too many columns (${width} > ${MAX_COLS})`);
@@ -83,9 +83,12 @@ export const toImportTable = (
     return `${base}_${count + 1}`;
   });
   // Re-infer via csvToTable types when available, else fallback.
+  // Headerless path: csvToTable's probe corrupts the first data row, so
+  // infer directly from the real body.
   const types: ColType[] = finalNames.map((_, i) => {
     const override = opts.typeOverrides?.[i];
     if (override) return override;
+    if (!opts.hasHeader) return toColType(inferColumnType(body.map((row) => row[i] ?? '')));
     return toColType(table.types[i] ?? 'str');
   });
   // Decimal comma normalization for numeric columns.
@@ -93,21 +96,21 @@ export const toImportTable = (
   const normalized = (opts.decimalComma ?? true)
     ? body.map((row) => row.map((cell, i) => (numeric[i] && cell.includes(',') ? cell.trim().replace(/\./g, '').replace(',', '.') : cell)))
     : body;
-  const skippedEmpty = rows.length - padded.filter((r) => r.some((v) => v.trim() !== '')).length;
-  return { names: finalNames, types, rows: normalized, skippedEmpty: Math.max(0, skippedEmpty), renamedDupes };
+  const skippedEmpty = opts.skippedEmpty ?? Math.max(0, rows.length - padded.filter((r) => r.some((v) => v.trim() !== '')).length);
+  return { names: finalNames, types, rows: normalized, skippedEmpty, renamedDupes };
 };
 
 export const readDelimitedTable = (
   text: string,
   opts: { delimiter: Delimiter | string; hasHeader: boolean; decimalComma?: boolean; typeOverrides?: Record<number, ColType> }
 ): ImportTable => {
-  const { rows } = readDelimited(text, opts);
+  const { rows, skippedEmpty } = readDelimited(text, opts);
   if (rows.length === 0) throw new Error('No data rows found');
   const first = rows[0];
   const names = opts.hasHeader ? first.map((c, i) => c.trim() || `Var${i + 1}`) : first.map((_, i) => `Var${i + 1}`);
   const body = opts.hasHeader ? rows.slice(1) : rows;
   if (opts.hasHeader && body.length === 0) throw new Error('Header found but no data rows');
-  return toImportTable(names, body, opts);
+  return toImportTable(names, body, { ...opts, skippedEmpty });
 };
 
 export const readJsonTable = (

@@ -322,7 +322,9 @@ export default function App() {
       const json = looksLikeJson(text) || file.name.toLowerCase().endsWith('.json');
       const tricky = json || /[;\t|]/.test(text.slice(0, 2000));
       if (!tricky && text.length < 200000) {
-        const prefDelim = prefs.delimiter === 'tab' ? '\t' : prefs.delimiter === 'auto' ? ',' : prefs.delimiter;
+        const prefDelim = prefs.delimiter === 'tab' || prefs.delimiter === '\t'
+          ? '\t'
+          : ([';', '|', ','].includes(prefs.delimiter) ? prefs.delimiter : ',');
         const table = readDelimitedTable(text, {
           delimiter: prefDelim,
           hasHeader: prefs.hasHeader,

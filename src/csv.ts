@@ -13,7 +13,7 @@ export const detectDelimiter = (text: string): string => {
   return semicolons > commas ? ';' : ',';
 };
 
-export const parseCsv = (text: string, delimiter?: string): string[][] => {
+export const parseCsv = (text: string, delimiter?: string, opts?: { keepEmpty?: boolean }): string[][] => {
   const separator = delimiter ?? detectDelimiter(text);
   const rows: string[][] = [];
   let row: string[] = [];
@@ -59,6 +59,7 @@ export const parseCsv = (text: string, delimiter?: string): string[][] => {
     rows.push(row);
   }
 
+  if (opts?.keepEmpty) return rows;
   return rows.filter(values => values.some(value => value.trim() !== ''));
 };
 
