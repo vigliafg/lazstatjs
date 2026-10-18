@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { GridData } from './types';
 import {
   findReplace, trimGrid, removeEmptyRows, removeDuplicateRows, fillMissing,
@@ -18,6 +18,12 @@ export function CleanPanel({ grid, onApply }: Props) {
   const [fillCol, setFillCol] = useState(0);
   const [fillStrategy, setFillStrategy] = useState<'mean' | 'median' | 'mode' | 'value'>('mean');
   const [fillValue, setFillValue] = useState('');
+
+  useEffect(() => {
+    const max = Math.max(0, grid.cols.length - 1);
+    if (fillCol > max) setFillCol(max);
+    if (typeof scopeCol === 'number' && scopeCol > max) setScopeCol(max);
+  }, [grid.cols.length, fillCol, scopeCol]);
 
   const runFindReplace = () => {
     const { grid: next, count } = findReplace(grid, search, replace, {

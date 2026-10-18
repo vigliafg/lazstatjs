@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { GridData } from './types';
 import { sortByColumn, recodeColumn, splitColumn, mergeColumns, computeColumn } from './ops';
 
@@ -19,6 +19,16 @@ export function TransformPanel({ grid, onApply }: Props) {
   const [mergeSep, setMergeSep] = useState('_');
   const [expr, setExpr] = useState('Score_Post - Score_Pre');
   const [exprName, setExprName] = useState('Diff');
+
+  // Column indexes go stale after delete/merge: clamp into range.
+  useEffect(() => {
+    const max = Math.max(0, grid.cols.length - 1);
+    if (sortCol > max) setSortCol(max);
+    if (recodeCol > max) setRecodeCol(max);
+    if (splitCol > max) setSplitCol(max);
+    if (mergeA > max) setMergeA(max);
+    if (mergeB > max) setMergeB(Math.min(max, 1));
+  }, [grid.cols.length, sortCol, recodeCol, splitCol, mergeA, mergeB]);
 
   const parseMapping = (): Record<string, string> => {
     const map: Record<string, string> = {};

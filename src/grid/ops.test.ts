@@ -115,4 +115,25 @@ describe('grid ops foundation', () => {
     assert.equal(grid.cols.length, 3);
     assert.equal(grid.rows[0][2], '2');
   });
+
+  it('guards out of range indexes', () => {
+    const g = demo();
+    assert.equal(sortByColumn(g, 99, 'asc'), g);
+    assert.deepEqual(recodeColumn(g, -1, { a: 'b' }).grid, g);
+    assert.equal(splitColumn(g, 9, ';'), g);
+    assert.equal(mergeColumns(g, 0, 9, '_'), g);
+    assert.equal(fillMissing(g, 5, 'mean').filled, 0);
+    assert.equal(pasteTsvAt(g, 0, 0, []), g);
+  });
+
+  it('paste clamps anchor', () => {
+    const g = demo();
+    const out = pasteTsvAt(g, 99, -5, [['x']]);
+    assert.equal(out.rows[out.rows.length - 1][0], 'x');
+  });
+
+  it('deleteRow keeps at least one row', () => {
+    const g: GridData = { cols: [{ name: 'A', type: 'str' }], rows: [['a']] };
+    assert.equal(deleteRow(g, 0).rows.length, 1);
+  });
 });

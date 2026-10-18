@@ -4,11 +4,13 @@ import { emptyRow, uniqueColName, validateValue } from './types';
 /* ---------- Structural operations (pure, return new GridData) ---------- */
 
 export const setCell = (grid: GridData, r: number, c: number, val: string): GridData => {
+  if (r < 0 || r >= grid.rows.length || c < 0 || c >= grid.cols.length) return grid;
   const rows = grid.rows.map((row, i) => (i === r ? row.map((v, j) => (j === c ? val : v)) : [...row]));
   return { cols: grid.cols, rows };
 };
 
 export const renameColumn = (grid: GridData, c: number, name: string): GridData => {
+  if (c < 0 || c >= grid.cols.length) return grid;
   const clean = name.trim() || grid.cols[c].name;
   const dupe = grid.cols.some((col, i) => i !== c && col.name.toLowerCase() === clean.toLowerCase());
   const finalName = dupe ? uniqueColName(grid.cols, clean) : clean;
@@ -26,12 +28,14 @@ export const addColumnEnd = (grid: GridData): GridData => {
 };
 
 export const insertColumnAt = (grid: GridData, at: number): GridData => {
+  const pos = Math.max(0, Math.min(grid.cols.length, at));
   const name = uniqueColName(grid.cols, `Var${grid.cols.length + 1}`);
-  const cols = [...grid.cols.slice(0, at), { name, type: 'num' as ColType }, ...grid.cols.slice(at)];
-  return { cols, rows: grid.rows.map((r) => [...r.slice(0, at), '', ...r.slice(at)]) };
+  const cols = [...grid.cols.slice(0, pos), { name, type: 'num' as ColType }, ...grid.cols.slice(pos)];
+  return { cols, rows: grid.rows.map((r) => [...r.slice(0, pos), '', ...r.slice(pos)]) };
 };
 
 export const duplicateColumn = (grid: GridData, c: number): GridData => {
+  if (c < 0 || c >= grid.cols.length) return grid;
   const src = grid.cols[c];
   const name = uniqueColName(grid.cols, `${src.name}_copy`);
   const cols = [...grid.cols.slice(0, c + 1), { name, type: src.type }, ...grid.cols.slice(c + 1)];
@@ -62,15 +66,21 @@ export const addRowEnd = (grid: GridData): GridData => ({
   rows: [...grid.rows, emptyRow(grid.cols.length)],
 });
 
-export const insertRowAt = (grid: GridData, at: number): GridData => ({
-  cols: grid.cols,
-  rows: [...grid.rows.slice(0, at), emptyRow(grid.cols.length), ...grid.rows.slice(at)],
-});
+export const insertRowAt = (grid: GridData, at: number): GridData => {
+  const pos = Math.max(0, Math.min(grid.rows.length, at));
+  return {
+    cols: grid.cols,
+    rows: [...grid.rows.slice(0, pos), emptyRow(grid.cols.length), ...grid.rows.slice(pos)],
+  };
+};
 
-export const deleteRow = (grid: GridData, r: number): GridData => ({
-  cols: grid.cols,
-  rows: grid.rows.filter((_, i) => i !== r),
-});
+export const deleteRow = (grid: GridData, r: number): GridData => {
+  if (grid.rows.length <= 1 || r < 0 || r >= grid.rows.length) return grid;
+  return {
+    cols: grid.cols,
+    rows: grid.rows.filter((_, i) => i !== r),
+  };
+};
 
 export const clearGrid = (grid: GridData): GridData => ({
   cols: grid.cols,
@@ -111,8 +121,11 @@ export const parseTsv = (text: string): string[][] =>
 
 /** Paste a TSV block at anchor, expanding rows/cols as needed. */
 export const pasteTsvAt = (grid: GridData, r0: number, c0: number, block: string[][]): GridData => {
-  const needRows = r0 + block.length;
-  const needCols = Math.max(grid.cols.length, c0 + Math.max(0, ...block.map((r) => r.length)));
+  if (!block || block.length === 0) return grid;
+  const ar = Math.max(0, Math.min(grid.rows.length, r0));
+  const ac = Math.max(0, c0);
+  const needRows = ar + block.length;
+  const needCols = Math.max(grid.cols.length, ac + Math.max(0, ...block.map((r) => r.length)));
   let cols: Column[] = [...grid.cols];
   while (cols.length < needCols) cols = [...cols, { name: uniqueColName(cols, `Var${cols.length + 1}`), type: 'num' }];
   const rows: string[][] = grid.rows.map((r) => {
@@ -123,7 +136,7 @@ export const pasteTsvAt = (grid: GridData, r0: number, c0: number, block: string
   while (rows.length < needRows) rows.push(emptyRow(needCols));
   block.forEach((line, dr) => {
     line.forEach((val, dc) => {
-      rows[r0 + dr][c0 + dc] = val;
+      rows[ar + dr][ac + dc] = val;
     });
   });
   return { cols, rows };
@@ -294,6 +307,7 @@ export const fillMissing = (
   col: number,
   strategy: 'mean' | 'median' | 'mode' | { value: string }
 ): { grid: GridData; filled: number; fillWith: string } => {
+  if (col < 0 || col >= grid.cols.length) return { grid, filled: 0, fillWith: '' };
   const vals = grid.rows.map((r) => r[col] ?? '');
   const filled = vals.filter((v) => String(v).trim() !== '');
   let fillWith = '';
@@ -340,6 +354,7 @@ const numVal = (v: string): number | null => {
 };
 
 export const sortByColumn = (grid: GridData, col: number, dir: 'asc' | 'desc', nullsFirst = false): GridData => {
+  if (col < 0 || col >= grid.cols.length) return grid;
   const rows = grid.rows.map((r, i) => ({ r: [...r], i }));
   rows.sort((a, b) => {
     const va = a.r[col] ?? '';
@@ -363,6 +378,7 @@ export const sortByColumn = (grid: GridData, col: number, dir: 'asc' | 'desc', n
 };
 
 export const recodeColumn = (grid: GridData, col: number, mapping: Record<string, string>, unmatched: 'keep' | 'empty' = 'keep'): { grid: GridData; changed: number } => {
+  if (col < 0 || col >= grid.cols.length) return { grid, changed: 0 };
   let changed = 0;
   const rows = grid.rows.map((row) => {
     const v = row[col] ?? '';
@@ -385,6 +401,7 @@ export const recodeColumn = (grid: GridData, col: number, mapping: Record<string
 
 export const splitColumn = (grid: GridData, col: number, sep: string, newName2?: string): GridData => {
   if (!sep) return grid;
+  if (col < 0 || col >= grid.cols.length) return grid;
   const src = grid.cols[col];
   const name2 = uniqueColName(grid.cols, newName2?.trim() || `${src.name}_2`);
   const cols = [...grid.cols.slice(0, col + 1), { name: name2, type: src.type }, ...grid.cols.slice(col + 1)];
@@ -403,6 +420,7 @@ export const splitColumn = (grid: GridData, col: number, sep: string, newName2?:
 
 export const mergeColumns = (grid: GridData, a: number, b: number, sep: string, newName?: string): GridData => {
   if (a === b) return grid;
+  if (a < 0 || b < 0 || a >= grid.cols.length || b >= grid.cols.length) return grid;
   const lo = Math.min(a, b);
   const hi = Math.max(a, b);
   const name = (newName?.trim() || `${grid.cols[lo].name}_${grid.cols[hi].name}`).trim();

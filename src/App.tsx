@@ -205,7 +205,7 @@ export default function App() {
   };
 
   const updateCell = (r: number, c: number, val: string) => {
-    setGrid((prev) => gridSetCell(prev, r, c, val));
+    setGrid((prev) => gridSetCell(prev, r, c, val), { coalesce: true, kind: `cell-${r}-${c}` });
   };
 
   const updateColType = (c: number, type: ColType) => {

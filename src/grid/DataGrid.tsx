@@ -39,10 +39,20 @@ export function DataGrid(props: Props) {
   };
 
   useEffect(() => {
+    if (!menu) return;
     const close = () => setMenu(null);
-    window.addEventListener('click', close);
-    return () => window.removeEventListener('click', close);
-  }, []);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenu(null);
+    };
+    // Delay so the same right-click that opened the menu does not close it.
+    const t = setTimeout(() => window.addEventListener('click', close), 0);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('click', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [menu]);
 
   useEffect(() => {
     if (!props.focusCell) return;
@@ -138,14 +148,25 @@ export function DataGrid(props: Props) {
                         data-cell={`${rIdx}-${cIdx}`}
                         className={`w-full h-full bg-transparent border-none px-2 py-1 text-text outline-none focus:bg-accent/10 transition-colors ${!isValid ? 'bg-red/10 text-red' : ''} ${selected ? 'bg-accent/10' : ''}`}
                         value={cell}
-                        onFocus={() => {
+                        onFocus={(e) => {
+                          // Programmatic focus from keyboard nav already set the
+                          // anchor/selection; do not collapse a shift-selection.
+                          const ae = e.relatedTarget as HTMLElement | null;
+                          if (ae?.dataset?.cell) return;
                           setAnchor({ r: rIdx, c: cIdx });
                           setSel({ r0: rIdx, c0: cIdx, r1: rIdx, c1: cIdx });
+                        }}
+                        onClick={(e) => {
+                          if (e.shiftKey && anchor) {
+                            setSel({ r0: anchor.r, c0: anchor.c, r1: rIdx, c1: cIdx });
+                          } else {
+                            setAnchor({ r: rIdx, c: cIdx });
+                            setSel({ r0: rIdx, c0: cIdx, r1: rIdx, c1: cIdx });
+                          }
                         }}
                         onChange={(e) => props.onCell(rIdx, cIdx, e.target.value)}
                         onKeyDown={(e) => {
                           const move = (dr: number, dc: number) => {
-                            e.preventDefault();
                             const nr = Math.max(0, Math.min(grid.rows.length - 1, rIdx + dr));
                             const nc = Math.max(0, Math.min(grid.cols.length - 1, cIdx + dc));
                             if (e.shiftKey && anchor) {
@@ -154,14 +175,16 @@ export function DataGrid(props: Props) {
                               setAnchor({ r: nr, c: nc });
                               setSel({ r0: nr, c0: nc, r1: nr, c1: nc });
                             }
-                            document.querySelector<HTMLInputElement>(`input[data-cell="${nr}-${nc}"]`)?.focus();
+                            requestAnimationFrame(() => {
+                              document.querySelector<HTMLInputElement>(`input[data-cell="${nr}-${nc}"]`)?.focus();
+                            });
                           };
-                          if (e.key === 'ArrowDown') move(1, 0);
-                          else if (e.key === 'ArrowUp') move(-1, 0);
-                          else if (e.key === 'ArrowLeft') move(0, -1);
-                          else if (e.key === 'ArrowRight') move(0, 1);
-                          else if (e.key === 'Enter') move(e.shiftKey ? -1 : 1, 0);
-                          else if (e.key === 'Tab') move(0, e.shiftKey ? -1 : 1);
+                          if (e.key === 'ArrowDown') { e.preventDefault(); move(1, 0); }
+                          else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1, 0); }
+                          else if (e.key === 'ArrowLeft') { e.preventDefault(); move(0, -1); }
+                          else if (e.key === 'ArrowRight') { e.preventDefault(); move(0, 1); }
+                          else if (e.key === 'Enter') { e.preventDefault(); move(e.shiftKey ? -1 : 1, 0); }
+                          else if (e.key === 'Tab') { e.preventDefault(); move(0, e.shiftKey ? -1 : 1); }
                           else if ((e.key === 'Delete' || e.key === 'Backspace') && e.ctrlKey && sel) {
                             e.preventDefault();
                             props.onClearRange(sel);

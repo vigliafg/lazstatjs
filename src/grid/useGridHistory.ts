@@ -17,21 +17,39 @@ const sameGrid = (a: GridData, b: GridData): boolean =>
 /** Undo/redo stack for the data grid. Call `commit(next)` instead of setState. */
 export function useGridHistory(initial: GridData) {
   const [grid, setGridState] = useState<GridData>(initial);
+  const gridRef = useRef<GridData>(initial);
   const past = useRef<GridData[]>([]);
   const future = useRef<GridData[]>([]);
-  const [, force] = useState(0);
+  const [, setVersion] = useState(0);
+  const lastCommitAt = useRef(0);
+  const lastCommitKind = useRef<string>('');
 
+  const bump = () => setVersion((x) => x + 1);
+
+  // Coalesce rapid cell edits (typing) into a single history entry so one
+  // Undo restores the pre-typing value instead of one char at a time.
   const commit = useCallback(
-    (next: GridData | ((prev: GridData) => GridData)) => {
-      setGridState((prev) => {
-        const value = typeof next === 'function' ? (next as (p: GridData) => GridData)(prev) : next;
-        if (sameGrid(prev, value)) return prev;
+    (next: GridData | ((prev: GridData) => GridData), opts?: { coalesce?: boolean; kind?: string }) => {
+      const prev = gridRef.current;
+      const value = typeof next === 'function' ? (next as (p: GridData) => GridData)(prev) : next;
+      if (sameGrid(prev, value)) return;
+      const now = Date.now();
+      const canCoalesce =
+        opts?.coalesce &&
+        opts.kind !== undefined &&
+        lastCommitKind.current === opts.kind &&
+        now - lastCommitAt.current < 1200 &&
+        past.current.length > 0;
+      if (!canCoalesce) {
         past.current.push(clone(prev));
         if (past.current.length > CAP) past.current.shift();
-        future.current = [];
-        queueMicrotask(() => force((x) => x + 1));
-        return value;
-      });
+      }
+      future.current = [];
+      lastCommitAt.current = now;
+      lastCommitKind.current = opts?.kind ?? '';
+      gridRef.current = value;
+      setGridState(value);
+      bump();
     },
     []
   );
@@ -39,28 +57,30 @@ export function useGridHistory(initial: GridData) {
   const setWithoutHistory = useCallback((next: GridData) => {
     future.current = [];
     past.current = [];
+    lastCommitKind.current = '';
+    gridRef.current = next;
     setGridState(next);
-    force((x) => x + 1);
+    bump();
   }, []);
 
   const undo = useCallback(() => {
-    setGridState((prev) => {
-      const last = past.current.pop();
-      if (!last) return prev;
-      future.current.push(clone(prev));
-      force((x) => x + 1);
-      return last;
-    });
+    const last = past.current.pop();
+    if (!last) return;
+    future.current.push(clone(gridRef.current));
+    lastCommitKind.current = '';
+    gridRef.current = last;
+    setGridState(last);
+    bump();
   }, []);
 
   const redo = useCallback(() => {
-    setGridState((prev) => {
-      const next = future.current.pop();
-      if (!next) return prev;
-      past.current.push(clone(prev));
-      force((x) => x + 1);
-      return next;
-    });
+    const next = future.current.pop();
+    if (!next) return;
+    past.current.push(clone(gridRef.current));
+    lastCommitKind.current = '';
+    gridRef.current = next;
+    setGridState(next);
+    bump();
   }, []);
 
   return {
