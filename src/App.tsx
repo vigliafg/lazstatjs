@@ -66,20 +66,39 @@ import {
 } from './statsHelpers';
 import { buildHistogram, pairedValues, parseNum, pooledTTest, welchTTest } from './stats/core';
 import { csvToTable, parseCsv, toCsv, trimEmptyRows } from './csv';
+import type { ColType, GridData } from './grid/types';
+import {
+  findInvalid as gridFindInvalid,
+  invalidByColumn as gridInvalidByColumn,
+  coerceGrid as gridCoerce,
+} from './grid/ops';
+import { nonEmptyRowCount, countInvalidCells } from './grid/types';
+import { useGridHistory } from './grid/useGridHistory';
+import {
+  setCell as gridSetCell,
+  addColumnEnd as gridAddColumn,
+  addRowEnd as gridAddRow,
+  setColType as gridSetColType,
+  clearGrid as gridClear,
+  newGrid as makeNewGrid,
+  renameColumn as gridRenameColumn,
+  insertColumnAt as gridInsertColumn,
+  duplicateColumn as gridDuplicateColumn,
+  moveColumn as gridMoveColumn,
+  deleteColumn as gridDeleteColumn,
+  insertRowAt as gridInsertRow,
+  deleteRow as gridDeleteRow,
+  pasteTsvAt as gridPasteTsv,
+  parseTsv as parseTsvBlock,
+  rangeToTsv as gridRangeToTsv,
+  clearRange as gridClearRange,
+  fillDownRange as gridFillDown,
+} from './grid/ops';
+import { DataGrid } from './grid/DataGrid';
+import { CleanPanel } from './grid/CleanPanel';
+import { TransformPanel } from './grid/TransformPanel';
 
 // --- Types ---
-type ColType = 'num' | 'int' | 'dec' | 'str' | 'alp' | 'chr' | 'bol' | 'dat';
-
-interface Column {
-  name: string;
-  type: ColType;
-}
-
-interface GridData {
-  cols: Column[];
-  rows: string[][];
-}
-
 interface AnalysisConfig {
   id: string;
   label: string;
@@ -87,17 +106,6 @@ interface AnalysisConfig {
 }
 
 // --- Constants ---
-const COL_TYPES: { id: ColType; label: string; full: string; regex: RegExp }[] = [
-  { id: 'num', label: 'num', full: 'Numeric (auto-detect)', regex: /^-?\d*\.?\d*$/ },
-  { id: 'int', label: 'int', full: 'Integer (whole number)', regex: /^-?\d+$/ },
-  { id: 'dec', label: 'dec', full: 'Decimal (floating point)', regex: /^-?\d+\.?\d*$/ },
-  { id: 'str', label: 'str', full: 'String (free text)', regex: /[\s\S]*/ },
-  { id: 'alp', label: 'alp', full: 'Alpha (a–z, A–Z only)', regex: /^[A-Za-z]+$/ },
-  { id: 'chr', label: 'chr', full: 'Char (single character)', regex: /^.$/ },
-  { id: 'bol', label: 'bol', full: 'Boolean (0/1/T/F/yes/no)', regex: /^(0|1|t|f|true|false|yes|no)$/i },
-  { id: 'dat', label: 'dat', full: 'Date (YYYY-MM-DD)', regex: /^\d{4}-\d{2}-\d{2}$/ },
-];
-
 const PALETTE = ['#4f9cf9', '#34d399', '#f87171', '#fbbf24', '#a78bfa', '#38bdf8', '#fb923c', '#e879f9'];
 
 // --- Helper Functions ---
@@ -112,18 +120,10 @@ const fmtP = (p: number) => {
   return p.toFixed(4);
 };
 
-const validateValue = (val: string, type: ColType) => {
-  if (val === '' || val === null) return true;
-  const ti = COL_TYPES.find(t => t.id === type) || COL_TYPES[0];
-  return ti.regex.test(val.trim());
-};
-
-// --- Components ---
-
 export default function App() {
   const [activeTab, setActiveTab] = useState<'data' | 'analysis' | 'settings'>('data');
   const [activeAnalysis, setActiveAnalysis] = useState<string>('wizard');
-  const [grid, setGrid] = useState<GridData>({
+  const gridHistory = useGridHistory({
     cols: [
       { name: 'Score_Pre', type: 'num' },
       { name: 'Score_Post', type: 'num' },
@@ -136,6 +136,21 @@ export default function App() {
       return ['', '', '', ''];
     })
   });
+  const grid = gridHistory.grid;
+  const setGrid = gridHistory.commit;
+  const undoGrid = gridHistory.undo;
+  const redoGrid = gridHistory.redo;
+  const canUndoGrid = gridHistory.canUndo;
+  const canRedoGrid = gridHistory.canRedo;
+  const resetGridHistory = gridHistory.setWithoutHistory;
+  const [focusCell, setFocusCell] = useState<{ r: number; c: number; stamp: number } | null>(null);
+  const [selRange, setSelRange] = useState<{ r0: number; c0: number; r1: number; c1: number } | null>(null);
+  const [showClean, setShowClean] = useState(false);
+  const [showTransform, setShowTransform] = useState(false);
+  const [validation, setValidation] = useState<{ ran: boolean; issues: { r: number; c: number; value: string; colName: string }[] }>({
+    ran: false,
+    issues: [],
+  });
   const [outputs, setOutputs] = useState<React.ReactNode[]>([]);
   const [toasts, setToasts] = useState<{ id: number; title: string; msg: string; type: 'ok' | 'warn' | 'error' }[]>([]);
   useEffect(() => {
@@ -144,6 +159,22 @@ export default function App() {
     const el = document.getElementById('output-content');
     if (el) el.scrollTop = el.scrollHeight;
   }, [outputs]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undoGrid();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        redoGrid();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undoGrid, redoGrid]);
 
   // Each run pushes a single block: the written report is part of that block,
   // so it always closes the run after every table and chart.
@@ -166,34 +197,19 @@ export default function App() {
   };
 
   const addColumn = () => {
-    setGrid(prev => ({
-      cols: [...prev.cols, { name: `Var${prev.cols.length + 1}`, type: 'num' }],
-      rows: prev.rows.map(r => [...r, ''])
-    }));
+    setGrid((prev) => gridAddColumn(prev));
   };
 
   const addRow = () => {
-    setGrid(prev => ({
-      ...prev,
-      rows: [...prev.rows, new Array(prev.cols.length).fill('')]
-    }));
+    setGrid((prev) => gridAddRow(prev));
   };
 
   const updateCell = (r: number, c: number, val: string) => {
-    setGrid(prev => {
-      const newRows = [...prev.rows];
-      newRows[r] = [...newRows[r]];
-      newRows[r][c] = val;
-      return { ...prev, rows: newRows };
-    });
+    setGrid((prev) => gridSetCell(prev, r, c, val));
   };
 
   const updateColType = (c: number, type: ColType) => {
-    setGrid(prev => {
-      const newCols = [...prev.cols];
-      newCols[c] = { ...newCols[c], type };
-      return { ...prev, cols: newCols };
-    });
+    setGrid((prev) => gridSetColType(prev, c, type));
   };
 
   const csvInputRef = useRef<HTMLInputElement>(null);
@@ -206,10 +222,11 @@ export default function App() {
         showToast('Import', 'The file has no data rows', 'warn');
         return;
       }
-      setGrid({
+      const next = {
         cols: table.names.map((name, index) => ({ name, type: table.types[index] as ColType })),
         rows: table.rows.map(row => [...row]),
-      });
+      } as GridData;
+      resetGridHistory(next);
       setActiveTab('data');
       showToast('Import', `${table.rows.length} rows and ${table.names.length} columns imported`, 'ok');
     } catch (error) {
@@ -2120,9 +2137,16 @@ export default function App() {
           <div className="flex-1 flex flex-col overflow-hidden">
             <div className="bg-surface border-b border-border p-1.5 flex items-center gap-2 shrink-0">
               <span className="font-mono text-[10px] text-text3 uppercase tracking-widest px-2">File:</span>
-              <button className="tb-btn" onClick={() => setGrid({ cols: [{ name: 'Var1', type: 'num' }], rows: Array(20).fill(['']) })}>New</button>
+              <button className="tb-btn" onClick={() => resetGridHistory(makeNewGrid())}>New</button>
               <button className="tb-btn" onClick={() => csvInputRef.current?.click()}>Import CSV</button>
               <button className="tb-btn" onClick={exportCsv}>Export CSV</button>
+              <div className="h-4 w-px bg-border mx-1" />
+              <button className="tb-btn" disabled={!canUndoGrid} onClick={undoGrid} title="Undo (Ctrl+Z)">
+                Undo
+              </button>
+              <button className="tb-btn" disabled={!canRedoGrid} onClick={redoGrid} title="Redo (Ctrl+Y)">
+                Redo
+              </button>
               <input
                 ref={csvInputRef}
                 type="file"
@@ -2135,70 +2159,191 @@ export default function App() {
                 }}
               />
               <div className="h-4 w-px bg-border mx-2" />
-              <button className="tb-btn text-yellow" onClick={() => showToast('Validation', 'All cells validated successfully', 'ok')}>Validate</button>
+              <button
+                className="tb-btn text-yellow"
+                onClick={() => {
+                  const issues = gridFindInvalid(grid);
+                  setValidation({ ran: true, issues });
+                  if (issues.length === 0) showToast('Validation', 'All cells validated successfully', 'ok');
+                  else showToast('Validation', `${issues.length} invalid cells found`, 'warn');
+                }}
+              >
+                Validate
+              </button>
+              <button
+                className="tb-btn"
+                onClick={() => {
+                  const { grid: next, changed } = gridCoerce(grid);
+                  if (changed === 0) {
+                    showToast('Auto-fix', 'Nothing to coerce', 'ok');
+                    return;
+                  }
+                  setGrid(next);
+                  setValidation({ ran: false, issues: [] });
+                  showToast('Auto-fix', `${changed} cells coerced`, 'ok');
+                }}
+              >
+                Auto-fix
+              </button>
+              <button className={`tb-btn ${showClean ? 'bg-accent text-white border-accent' : ''}`} onClick={() => setShowClean((v) => !v)}>
+                Clean
+              </button>
+              <button className={`tb-btn ${showTransform ? 'bg-accent text-white border-accent' : ''}`} onClick={() => setShowTransform((v) => !v)}>
+                Transform
+              </button>
             </div>
+
+            {showTransform && (
+              <TransformPanel
+                grid={grid}
+                onApply={(next, msg, kind = 'ok') => {
+                  if (next !== grid) {
+                    setGrid(next);
+                    setValidation({ ran: false, issues: [] });
+                  }
+                  showToast('Transform', msg, kind);
+                }}
+              />
+            )}
+
+            {showClean && (
+              <CleanPanel
+                grid={grid}
+                onApply={(next, msg) => {
+                  setGrid(next);
+                  setValidation({ ran: false, issues: [] });
+                  showToast('Clean', msg, 'ok');
+                }}
+              />
+            )}
+
+            {validation.ran && (
+              <div className="bg-surface border-b border-border px-3 py-1.5 flex flex-wrap items-center gap-2 text-[10px] font-mono shrink-0">
+                {validation.issues.length === 0 ? (
+                  <span className="text-green">VALID: 0 invalid cells</span>
+                ) : (
+                  <>
+                    <span className="text-yellow font-bold">{validation.issues.length} INVALID</span>
+                    <span className="text-text3">|</span>
+                    {gridInvalidByColumn(grid)
+                      .filter((c) => c.count > 0)
+                      .map((c) => (
+                        <button
+                          key={c.col}
+                          className="tb-btn"
+                          onClick={() => {
+                            const first = validation.issues.find((i) => i.c === c.col);
+                            if (first) {
+                              setFocusCell({ r: first.r, c: first.c, stamp: Date.now() });
+                              setActiveTab('data');
+                            }
+                          }}
+                        >
+                          {c.name}: {c.count}
+                        </button>
+                      ))}
+                    <button
+                      className="tb-btn"
+                      onClick={() => {
+                        const first = validation.issues[0];
+                        if (first) setFocusCell({ r: first.r, c: first.c, stamp: Date.now() });
+                      }}
+                    >
+                      Jump to first
+                    </button>
+                    <button className="tb-btn" onClick={() => setValidation({ ran: false, issues: [] })}>
+                      Dismiss
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
             
             <div className="panel-header">
               <div className="w-1.5 h-1.5 bg-accent rounded-full" />
               Grid View
             </div>
 
-            <div className="flex-1 overflow-auto scrollbar">
-              <table className="w-full border-collapse font-mono text-[11px]">
-                <thead className="sticky top-0 z-20">
-                  <tr className="bg-surface2">
-                    <th className="w-10 border border-border p-1 text-text3">#</th>
-                    {grid.cols.map((col, i) => (
-                      <th key={i} className="border border-border p-1 text-accent2 min-w-[100px]">
-                        {col.name}
-                      </th>
-                    ))}
-                  </tr>
-                  <tr className="bg-surface2/80 backdrop-blur">
-                    <th className="border border-border text-[8px] text-text3 uppercase p-1">Type</th>
-                    {grid.cols.map((col, i) => (
-                      <th key={i} className="border border-border p-0">
-                        <select 
-                          className="w-full bg-transparent border-none text-accent2 text-[10px] font-semibold p-1 outline-none appearance-none text-center cursor-pointer hover:bg-white/5"
-                          value={col.type}
-                          onChange={(e) => updateColType(i, e.target.value as ColType)}
-                        >
-                          {COL_TYPES.map(t => (
-                            <option key={t.id} value={t.id}>{t.label}</option>
-                          ))}
-                        </select>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {grid.rows.map((row, rIdx) => (
-                    <tr key={rIdx} className="hover:bg-white/5 transition-colors">
-                      <td className="border border-border text-center text-text3 bg-surface2/30">{rIdx + 1}</td>
-                      {row.map((cell, cIdx) => {
-                        const isValid = validateValue(cell, grid.cols[cIdx].type);
-                        return (
-                          <td key={cIdx} className="border border-border p-0 relative">
-                            <input 
-                              type="text"
-                              className={`w-full h-full bg-transparent border-none px-2 py-1 text-text outline-none focus:bg-accent/10 transition-colors ${!isValid ? 'bg-red/10 text-red' : ''}`}
-                              value={cell}
-                              onChange={(e) => updateCell(rIdx, cIdx, e.target.value)}
-                            />
-                            {cell === '' && <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[8px] text-text3 pointer-events-none italic opacity-50">null</span>}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <DataGrid
+              grid={grid}
+              focusCell={focusCell}
+              onCell={updateCell}
+              onRenameCol={(c, name) => {
+                setGrid((prev) => gridRenameColumn(prev, c, name));
+                setValidation((v) => ({ ...v, ran: false }));
+              }}
+              onColType={updateColType}
+              onInsertCol={(at) => setGrid((prev) => gridInsertColumn(prev, at))}
+              onDuplicateCol={(c) => setGrid((prev) => gridDuplicateColumn(prev, c))}
+              onMoveCol={(c, dir) => setGrid((prev) => gridMoveColumn(prev, c, dir))}
+              onDeleteCol={(c) => {
+                if (grid.cols.length <= 1) {
+                  showToast('Columns', 'At least one column is required', 'warn');
+                  return;
+                }
+                if (!window.confirm(`Delete column "${grid.cols[c]?.name}"? You can undo.`)) return;
+                setGrid((prev) => gridDeleteColumn(prev, c));
+              }}
+              onInsertRow={(at) => setGrid((prev) => gridInsertRow(prev, at))}
+              onDeleteRow={(r) => {
+                if (grid.rows.length <= 1) {
+                  showToast('Rows', 'At least one row is required', 'warn');
+                  return;
+                }
+                if (!window.confirm(`Delete row ${r + 1}? You can undo.`)) return;
+                setGrid((prev) => gridDeleteRow(prev, r));
+              }}
+              onPaste={(r, c, text) => {
+                const block = parseTsvBlock(text).filter((line) => line.some((v) => v !== ''));
+                if (block.length === 0) return;
+                setGrid((prev) => gridPasteTsv(prev, r, c, block));
+                showToast('Paste', `${block.length}x${Math.max(...block.map((l) => l.length))} cells pasted`, 'ok');
+              }}
+              onCopyRange={(range) => {
+                setSelRange(range);
+                const tsv = gridRangeToTsv(grid, range);
+                navigator.clipboard?.writeText(tsv).catch(() => undefined);
+                showToast('Copy', 'Range copied to clipboard', 'ok');
+              }}
+              onClearRange={(range) => setGrid((prev) => gridClearRange(prev, range))}
+              onFillDown={(range) => setGrid((prev) => gridFillDown(prev, range))}
+            />
+            {selRange && (
+              <div className="bg-surface border-t border-border px-3 py-1 flex items-center gap-2 text-[10px] font-mono text-text3 shrink-0">
+                <span>
+                  SEL: R{Math.min(selRange.r0, selRange.r1) + 1}-{Math.max(selRange.r0, selRange.r1) + 1} C
+                  {Math.min(selRange.c0, selRange.c1) + 1}-{Math.max(selRange.c0, selRange.c1) + 1}
+                </span>
+                <button className="tb-btn" onClick={() => setGrid((prev) => gridFillDown(prev, selRange))}>
+                  Fill down
+                </button>
+                <button className="tb-btn" onClick={() => setGrid((prev) => gridClearRange(prev, selRange))}>
+                  Clear selection
+                </button>
+                <button
+                  className="tb-btn"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(gridRangeToTsv(grid, selRange)).catch(() => undefined);
+                    showToast('Copy', 'Range copied to clipboard', 'ok');
+                  }}
+                >
+                  Copy
+                </button>
+              </div>
+            )}
 
             <div className="bg-surface border-t border-border p-2 flex gap-2 shrink-0">
               <button className="tb-btn" onClick={addColumn}><Plus className="w-3 h-3 inline mr-1" /> Column</button>
               <button className="tb-btn" onClick={addRow}><Plus className="w-3 h-3 inline mr-1" /> Row</button>
-              <button className="tb-btn text-red/80 hover:bg-red hover:text-white" onClick={() => setGrid(prev => ({ ...prev, rows: prev.rows.map(r => ['']) }))}><Trash2 className="w-3 h-3 inline mr-1" /> Clear</button>
+              <button
+                className="tb-btn text-red/80 hover:bg-red hover:text-white"
+                onClick={() => {
+                  if (!window.confirm('Clear all cells? You can undo.')) return;
+                  setGrid((prev) => gridClear(prev));
+                }}
+              >
+                <Trash2 className="w-3 h-3 inline mr-1" /> Clear
+              </button>
             </div>
           </div>
         )}
@@ -2857,9 +3002,11 @@ export default function App() {
 
       {/* Footer / Statusbar */}
       <footer className="h-8 bg-surface border-t border-border flex items-center px-4 text-[10px] font-mono text-text3 gap-6 shrink-0">
-        <div>ROWS: <span className="text-text2">{grid.rows.filter(r => r.some(v => v !== '')).length}</span></div>
+        <div>ROWS: <span className="text-text2">{nonEmptyRowCount(grid.rows)}/{grid.rows.length}</span></div>
         <div className="w-px h-3 bg-border" />
         <div>COLS: <span className="text-text2">{grid.cols.length}</span></div>
+        <div className="w-px h-3 bg-border" />
+        <div>INVALID: <span className={countInvalidCells(grid) > 0 ? 'text-yellow' : 'text-green'}>{countInvalidCells(grid)}</span></div>
         <div className="w-px h-3 bg-border" />
         <div>STATUS: <span className="text-green">READY</span></div>
         <div className="ml-auto flex items-center gap-2">
