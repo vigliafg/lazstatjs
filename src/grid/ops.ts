@@ -437,9 +437,12 @@ export const mergeColumns = (grid: GridData, a: number, b: number, sep: string, 
   if (a < 0 || b < 0 || a >= grid.cols.length || b >= grid.cols.length) return grid;
   const lo = Math.min(a, b);
   const hi = Math.max(a, b);
-  const name = (newName?.trim() || `${grid.cols[lo].name}_${grid.cols[hi].name}`).trim();
+  const raw = (newName?.trim() || `${grid.cols[lo].name}_${grid.cols[hi].name}`).trim() || 'Merged';
   const cols = grid.cols.filter((_, i) => i !== hi);
-  cols[lo] = { ...cols[lo], name: uniqueColName(cols.filter((_, i) => i !== lo), name) };
+  // uniqueColName checks against the passed list: exclude the slot being
+  // renamed so keeping the current name does not gain a spurious suffix.
+  const others = cols.filter((_, i) => i !== lo);
+  cols[lo] = { ...cols[lo], name: others.some((c) => c.name.toLowerCase() === raw.toLowerCase()) ? uniqueColName(others, raw) : raw };
   const rows = grid.rows.map((r) => {
     const merged = `${r[lo] ?? ''}${sep}${r[hi] ?? ''}`;
     const copy = r.filter((_, i) => i !== hi);
@@ -458,12 +461,21 @@ export const computeColumn = (
   colIndex: Record<string, number>
 ): { grid: GridData; error?: string } => {
   if (!SAFE_EXPR.test(expr)) return { grid, error: 'Unsafe characters in expression' };
+  if (expr.length > 500) return { grid, error: 'Expression too long' };
+  if (/__(?:proto|prototype|constructor)__/i.test(expr)) return { grid, error: 'Unsafe expression' };
+  // Column names arrive from user data: only map sane identifiers, and skip
+  // dangerous keys so a column literally named "__proto__" cannot pollute.
+  const BLOCKED = new Set(['__proto__', 'prototype', 'constructor', 'V']);
+  const names = Object.keys(colIndex)
+    .filter((n) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(n) && !BLOCKED.has(n))
+    .sort((a, b) => b.length - a.length);
   let js = expr.replace(/\^/g, '**');
-  const names = Object.keys(colIndex).sort((a, b) => b.length - a.length);
   names.forEach((name) => {
     js = js.replace(new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g'), `__v_${colIndex[name]}`);
   });
   if (/[A-Za-z_]/.test(js.replace(/__v_\d+/g, ''))) return { grid, error: 'Unknown column in expression' };
+  // Belt and braces: no property access or call expressions may survive.
+  if (/[.\[\];,{}'"`\\]/.test(js)) return { grid, error: 'Unsafe expression' };
   let fn: (vals: number[]) => number;
   try {
     fn = new Function('V', `return (${js.replace(/__v_(\d+)/g, 'V[$1]')});`) as (vals: number[]) => number;

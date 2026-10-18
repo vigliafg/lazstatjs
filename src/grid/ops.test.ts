@@ -159,4 +159,28 @@ describe('grid ops foundation', () => {
     };
     assert.equal(removeDuplicateRows(g).removed, 1);
   });
+
+  it('compute rejects unsafe expressions', () => {
+    const g: GridData = { cols: [{ name: 'A', type: 'num' }], rows: [['1']] };
+    assert.match(computeColumn(g, 'A.constructor', 'X', { A: 0 }).error ?? '', /Unsafe|Unknown/);
+    assert.match(computeColumn(g, 'nosuch + 1', 'X', { A: 0 }).error ?? '', /Unknown/);
+    assert.match(computeColumn(g, 'A'.repeat(600), 'X', { A: 0 }).error ?? '', /too long/);
+  });
+
+  it('compute ignores dangerous column names', () => {
+    const g: GridData = { cols: [{ name: 'A', type: 'num' }], rows: [['4']] };
+    const { grid, error } = computeColumn(g, 'A * 2', 'X', { A: 0, __proto__: 0 } as Record<string, number>);
+    assert.equal(error, undefined);
+    assert.equal(grid.rows[0][1], '8');
+  });
+
+  it('merge keeps name when unambiguous', () => {
+    const g: GridData = {
+      cols: [{ name: 'A', type: 'str' }, { name: 'B', type: 'str' }],
+      rows: [['x', 'y']],
+    };
+    const out = mergeColumns(g, 0, 1, ';', 'A');
+    assert.equal(out.cols[0].name, 'A');
+    assert.equal(out.rows[0][0], 'x;y');
+  });
 });
