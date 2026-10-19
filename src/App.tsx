@@ -34,6 +34,10 @@ import { SurvivalAnalysis, type SurvivalHandle } from './analyses/SurvivalAnalys
 import { CoxAnalysis, type CoxHandle } from './analyses/CoxAnalysis';
 import { WizardAnalysis, type WizardHandle } from './analyses/WizardAnalysis';
 import {
+  NonParamRepeatedAnalysis,
+  type NonParamRepeatedHandle,
+} from './analyses/NonParamRepeatedAnalysis';
+import {
   anovaReport,
   chiSquareReport,
   correlationReport,
@@ -145,6 +149,7 @@ const ANALYSIS_TABS = [
   { id: 'correlation', label: 'Correlation' },
   { id: 'chisquare', label: 'Chi-Square (χ²)' },
   { id: 'contingency', label: 'Contingency (R×C)' },
+  { id: 'nonparamrm', label: 'Non-parametric RM' },
   { id: 'samplesize', label: 'Sample Size / Power' },
   { id: 'distfit', label: 'Distribution Fit' },
   { id: 'factorial', label: 'Factorial ANOVA' },
@@ -557,6 +562,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const nonParamRepeatedRef = useRef<NonParamRepeatedHandle>(null);
   const contingencyRef = useRef<ContingencyHandle>(null);
   const sampleSizeRef = useRef<SampleSizeHandle>(null);
   const distFitRef = useRef<DistributionFitHandle>(null);
@@ -589,6 +595,9 @@ export default function App() {
         break;
       case 'contingency':
         contingencyRef.current?.run();
+        break;
+      case 'nonparamrm':
+        nonParamRepeatedRef.current?.run();
         break;
       case 'samplesize':
         sampleSizeRef.current?.run();
@@ -3261,6 +3270,16 @@ export default function App() {
                 {activeAnalysis === 'samplesize' && (
                   <SampleSizeAnalysis
                     ref={sampleSizeRef}
+                    ciLevel={ciLevel}
+                    onOutput={pushOutput}
+                    onError={(message) => showToast('Error', message, 'error')}
+                  />
+                )}
+
+                {activeAnalysis === 'nonparamrm' && (
+                  <NonParamRepeatedAnalysis
+                    ref={nonParamRepeatedRef}
+                    grid={grid}
                     ciLevel={ciLevel}
                     onOutput={pushOutput}
                     onError={(message) => showToast('Error', message, 'error')}

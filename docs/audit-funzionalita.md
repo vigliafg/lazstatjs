@@ -66,6 +66,13 @@ VIF e Breusch-Pagan già presenti. Audit puntuale di `regression.ts` prima di de
   (soglia 2/√n), condition index di Belsley e conteggi. Autovalori con Jacobi
   in `src/stats/linalg.ts`, reference test contro NumPy/SciPy.
 
+- **#3 Test non-parametrici — fatto (2026-10-19):** Friedman con correzione
+  per i ranghi uguali e W di Kendall, post-hoc Nemenyi con quantili del range
+  studentizzato calcolati numericamente (niente tabelle hard-coded), McNemar
+  esatto + Yates con odds ratio, Cochran Q e Jonckheere–Terpstra. Modulo puro
+  `src/stats/repeated.ts`, pannello `src/analyses/NonParamRepeatedAnalysis.tsx`,
+  report generati dalle tabelle e test contro SciPy.
+
 ## Contratto per nuove analisi
 Builder puro in `src/stats/` + reference test contro SciPy/R + `ReportSpec`
 auto-generato. Verifica: `npm run lint` + `npm test` (copre stats+io+grid).
