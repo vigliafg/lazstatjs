@@ -71,7 +71,9 @@ describe('grid ops foundation', () => {
   it('trim + empty + dupes', () => {
     const g: GridData = { cols: [{ name: 'A', type: 'str' }], rows: [['  a  '], ['a'], ['a'], ['']] };
     assert.equal(trimGrid(g).changed, 1);
-    assert.equal(removeDuplicateRows(g).removed, 1);
+    // Cells are compared after trimming, so the padded first row is also a
+    // duplicate of 'a': the two extra 'a' rows are dropped.
+    assert.equal(removeDuplicateRows(g).removed, 2);
     assert.equal(removeEmptyRows(g).removed, 1);
   });
 

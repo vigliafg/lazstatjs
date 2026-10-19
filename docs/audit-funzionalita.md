@@ -40,6 +40,17 @@ DataGrid ha già selezione e clipboard, manca navigazione su dataset grandi.
 VIF e Breusch-Pagan già presenti. Audit puntuale di `regression.ts` prima di decidere
 (White test, RESET, DFBETAS, condition index).
 
+## Stato avanzamento
+
+- **#2 Export risultati — fatto (2026-10-19):** cestino per singolo blocco, copia TSV
+  da ogni tabella, download PNG di tutti i grafici (2×, sfondo scuro) e report
+  HTML autonomo con CSS di stampa. Moduli `src/io/tableTsv.ts`,
+  `src/io/chartExport.ts`, `src/io/reportExport.ts`, `src/io/clipboard.ts`.
+- **#1 Persistenza progetto — ancora aperta:** l'output console contiene nodi
+  React, quindi il salvataggio di grid+output richiede prima un modello
+  serializzabile dei run (tabelle, grafici, report) oppure si limita a
+  grid+parametri+prefs con autosave.
+
 ## Contratto per nuove analisi
 Builder puro in `src/stats/` + reference test contro SciPy/R + `ReportSpec`
 auto-generato. Verifica: `npm run lint` + `npm test` (copre stats+io+grid).

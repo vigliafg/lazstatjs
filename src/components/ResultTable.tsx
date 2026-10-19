@@ -1,6 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { Check, Copy } from 'lucide-react';
 import type { TableColumn, TableSpec } from '../stats/types';
 import { formatCell, isSignificantP } from '../stats/format';
+import { copyText } from '../io/clipboard';
+import { tableToTsv } from '../io/tableTsv';
 
 const isNumericFormat = (column: TableColumn): boolean =>
   column.format !== undefined && column.format !== 'text';
@@ -15,6 +18,31 @@ const cellClass = (column: TableColumn, value: unknown): string => {
   return classes.join(' ');
 };
 
+const CopyTableButton: React.FC<{ spec: TableSpec }> = ({ spec }) => {
+  const [state, setState] = useState<'idle' | 'ok' | 'fail'>('idle');
+  const onClick = async () => {
+    const ok = await copyText(tableToTsv(spec));
+    setState(ok ? 'ok' : 'fail');
+    setTimeout(() => setState('idle'), 1500);
+  };
+  const label = state === 'ok' ? 'Copied' : state === 'fail' ? 'Copy failed' : 'Copy table as TSV';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={`${label}: ${spec.title}`}
+      data-no-print
+      className={`tb-btn ml-auto flex items-center gap-1 px-1.5 py-0.5 text-[10px] ${
+        state === 'ok' ? 'text-green border-green/50' : state === 'fail' ? 'text-red border-red/50' : ''
+      }`}
+    >
+      {state === 'ok' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+      {state === 'ok' ? 'Copied' : 'TSV'}
+    </button>
+  );
+};
+
 export const ResultTable: React.FC<{ spec: TableSpec }> = ({ spec }) => (
   <section className="mb-6">
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-2">
@@ -24,6 +52,7 @@ export const ResultTable: React.FC<{ spec: TableSpec }> = ({ spec }) => (
       {spec.subtitle && (
         <span className="text-[10px] text-text3 font-mono">{spec.subtitle}</span>
       )}
+      <CopyTableButton spec={spec} />
     </div>
 
     <div className="overflow-x-auto scrollbar">

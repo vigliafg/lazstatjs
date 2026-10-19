@@ -66,9 +66,31 @@
   .tb-btn {
     @apply bg-surface3 border border-border2 text-text2 font-sans text-[11px] px-2.5 py-1 cursor-pointer rounded transition-all hover:bg-accent hover:text-white hover:border-accent;
   }
+  .tb-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .tb-btn:disabled:hover {
+    @apply bg-surface3 border-border2 text-text2;
+  }
 
   .output-block {
     @apply mb-6;
+  }
+
+  /* Per-run remove control: revealed on hover/focus, always faintly visible
+     on touch devices where hover does not exist. */
+  .output-remove {
+    @apply absolute top-0 right-0 z-20 flex items-center rounded border border-border2 bg-surface3/90 p-1 text-text3 cursor-pointer transition-all opacity-0 hover:bg-red hover:text-white hover:border-red focus:opacity-100;
+  }
+  .output-run:hover > .output-remove,
+  .output-run:focus-within > .output-remove {
+    opacity: 1;
+  }
+  @media (hover: none) {
+    .output-remove {
+      opacity: 0.7;
+    }
   }
 
   .output-title {

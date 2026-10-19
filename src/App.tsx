@@ -103,6 +103,9 @@ import { looksLikeJson } from './io/detect';
 import { readDelimitedTable, readJsonTable } from './io/readers';
 import { downloadText } from './io/writers';
 import { loadPrefs, savePrefs } from './io/prefs';
+import { copyText } from './io/clipboard';
+import { exportChartsAsPng } from './io/chartExport';
+import { buildReportFromElement } from './io/reportExport';
 
 // --- Types ---
 interface AnalysisConfig {
@@ -273,7 +276,9 @@ export default function App() {
     } else {
       // Merge columns: add missing names, fill matched columns row-wise.
       setGrid((prev) => {
-        const existing = new Map(prev.cols.map((c, i) => [c.name.toLowerCase(), i]));
+        const existing = new Map<string, number>(
+          prev.cols.map((c, i) => [c.name.toLowerCase(), i] as [string, number])
+        );
         const colMap: number[] = [];
         const cols = [...prev.cols];
         table.names.forEach((n, ti) => {
@@ -2195,12 +2200,41 @@ export default function App() {
     showToast('Output', 'Output console cleared', 'ok');
   };
 
-  const copyOutput = () => {
+  const removeOutput = (index: number) => {
+    setOutputs((prev) => prev.filter((_, i) => i !== index));
+    showToast('Output', 'Result block removed', 'ok');
+  };
+
+  const copyOutput = async () => {
     const el = document.getElementById('output-content');
-    if (el) {
-      navigator.clipboard.writeText(el.innerText);
-      showToast('Output', 'Output copied to clipboard', 'ok');
+    if (!el) return;
+    const ok = await copyText(el.innerText);
+    showToast('Output', ok ? 'Output copied to clipboard' : 'Could not copy the output', ok ? 'ok' : 'error');
+  };
+
+  const exportChartPngs = async () => {
+    const el = document.getElementById('output-content');
+    if (!el) return;
+    const result = await exportChartsAsPng(el, 'lazstats-chart');
+    if (result.exported === 0 && result.failed === 0) {
+      showToast('Charts', 'No charts in the output console yet', 'warn');
+    } else if (result.failed > 0) {
+      showToast('Charts', `${result.exported} chart(s) exported, ${result.failed} failed`, 'warn');
+    } else {
+      showToast('Charts', `${result.exported} chart(s) exported as PNG`, 'ok');
     }
+  };
+
+  const exportReportHtml = () => {
+    const el = document.getElementById('output-content');
+    if (!el) return;
+    const html = buildReportFromElement(el, {
+      title: 'LazStats JS — Analysis Report',
+      generatedAt: new Date().toLocaleString(),
+      details: [`${nonEmptyRowCount(grid)} rows`, `${grid.cols.length} columns`, `CI ${ciLevel}%`],
+    });
+    downloadText(html, 'lazstats-report.html', 'text/html;charset=utf-8');
+    showToast('Report', 'Printable report downloaded — open it and print to PDF', 'ok');
   };
 
   return (
@@ -3014,6 +3048,22 @@ export default function App() {
                 </button>
                 <button className="tb-btn" onClick={clearOutput}>Clear</button>
                 <button className="tb-btn" onClick={copyOutput}>Copy</button>
+                <button
+                  className="tb-btn"
+                  onClick={exportChartPngs}
+                  disabled={outputs.length === 0}
+                  title="Download every chart in the output console as a PNG"
+                >
+                  Charts PNG
+                </button>
+                <button
+                  className="tb-btn"
+                  onClick={exportReportHtml}
+                  disabled={outputs.length === 0}
+                  title="Download a self-contained printable HTML report"
+                >
+                  Report HTML
+                </button>
               </div>
             </div>
 
@@ -3027,7 +3077,17 @@ export default function App() {
               ) : (
                 <div className="max-w-4xl mx-auto">
                   {outputs.map((output, i) => (
-                    <div key={`wrapper-${i}`}>
+                    <div key={`wrapper-${i}`} className="relative output-run group">
+                      <button
+                        type="button"
+                        onClick={() => removeOutput(i)}
+                        data-no-print
+                        title="Remove this result"
+                        aria-label="Remove this result block"
+                        className="output-remove"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
                       {i > 0 && (
                         <div className="output-separator">
                           <div className="output-separator-dot">

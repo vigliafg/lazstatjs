@@ -107,6 +107,11 @@ export const detectHeader = (rows: string[][]): { hasHeader: boolean; confidence
   const firstNumeric = first.filter((c) => isNum(c)).length / Math.max(1, first.length);
   const bodyNumeric = body.flat().filter((c) => c.trim() !== '' && isNum(c)).length / Math.max(1, body.flat().filter((c) => c.trim() !== '').length);
   const firstEmpty = first.filter((c) => c.trim() === '').length / Math.max(1, first.length);
+  // A first row that is entirely numeric while the body is numeric too is
+  // data (years, IDs), not a header: the usual type-contrast signal is absent.
+  if (firstNumeric === 1 && bodyNumeric >= 0.5) {
+    return { hasHeader: false, confidence: 0.2 };
+  }
   let confidence = 0.5 + (bodyNumeric - firstNumeric) * 0.5 - firstEmpty * 0.3;
   confidence = Math.max(0.05, Math.min(0.99, confidence));
   return { hasHeader: confidence >= 0.5, confidence };

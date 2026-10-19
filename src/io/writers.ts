@@ -110,8 +110,7 @@ const sanitizeSpsName = (name: string): string => {
   return (s || 'VAR').slice(0, 64).toUpperCase();
 };
 
-export const downloadText = (content: string, fileName: string, mime: string): void => {
-  const blob = new Blob([content], { type: mime });
+export const downloadBlob = (blob: Blob, fileName: string): void => {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -123,4 +122,8 @@ export const downloadText = (content: string, fileName: string, mime: string): v
   anchor.remove();
   // Revoke on next tick so the download can start first.
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
+export const downloadText = (content: string, fileName: string, mime: string): void => {
+  downloadBlob(new Blob([content], { type: mime }), fileName);
 };

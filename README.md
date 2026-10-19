@@ -34,6 +34,12 @@ LazStats JS provides a spreadsheet-like data editor and a full suite of parametr
 | **Cox (PH)** | Proportional hazards regression: partial likelihood with Breslow ties, Newton–Raphson with step halving, hazard ratios with CIs, LR/Wald/score tests, Harrell's C, Breslow baseline hazard, time-interaction test for proportional hazards, forest plot | Automatic dummy coding of small categorical covariates |
 | **Statistical Wizard** | Guided choice of the analysis: profiles every column, runs the assumption checks that matter (normality, Levene, paired differences) and points to the right panel with the exact columns to select | Alternative test when the assumptions fail |
 
+### Results
+- **Per-table TSV copy** directly from the table header, with the same formatting shown on screen
+- **Charts PNG**: every chart in the output console is rasterised at 2× on a dark background and downloaded as its own file
+- **Printable HTML report**: a self-contained document (tables, inline SVG charts and the written reports) with print styles, ready for *Print → Save as PDF*
+- **Per-run removal** in the output console, next to the existing global *Clear*
+
 ### Visualization
 - Bar charts, boxplots, scatter plots, line charts, histograms
 - Probability plots, interaction plots, power curves, ACF bars, forecast lines and intervals, Kaplan–Meier step curves, hazard-ratio forest plots
@@ -112,13 +118,15 @@ lazstatjs/
     │                       #   distfit, samplesize, timeseries, arima, survival, cox,
     │                       #   wizard, report)
     ├── analyses/           # Parameter panels + charts for the newer analyses
+    ├── io/                 # Smart IO (detect/readers/writers, import wizard, export dialog),
+    │                       #   table TSV copy, chart PNG export, printable HTML report
     ├── components/         # Reusable ResultTable and AnalysisReport renderers
     └── index.css           # Tailwind styles + dark theme
 ```
 
 ### Key Source Files
 
-- **`src/App.tsx`** (~2830 lines) — Application UI, chart wiring and analysis orchestration.
+- **`src/App.tsx`** (~3300 lines) — Application UI, chart wiring and analysis orchestration.
 - **`src/stats/`** — Pure statistic builders returning typed `TableSpec` objects. Every builder has reference tests against SciPy/NumPy values (mean CIs, Levene, Welch ANOVA, effect sizes, regression, correlations, odds ratios).
 - **`src/stats/report.ts`** — Builds the plain-language `ReportSpec` for each analysis by reading the already computed tables (headline, effect size, assumptions, glossary, limits). Because it never recomputes statistics, the prose cannot disagree with the numbers and follows the selected CI level. The newer modules (`contingency`, `factorial`, `logistic`, `distfit`, `samplesize`) keep their report builder next to the computation.
 - **`src/analyses/`** — Self-contained tabs for Contingency (R×C), Sample Size / Power, Distribution Fit, Factorial ANOVA, Logistic Regression, Time Series, Survival, Cox and the Wizard: they own their parameters, run through an imperative `run()` handle and append tables, charts and the written report to the output console. The Wizard does not re-implement tests: it opens the real panel with `onOpenAnalysis`.
