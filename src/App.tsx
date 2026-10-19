@@ -38,6 +38,7 @@ import {
   type NonParamRepeatedHandle,
 } from './analyses/NonParamRepeatedAnalysis';
 import { RepeatedAnovaAnalysis, type RepeatedAnovaHandle } from './analyses/RepeatedAnovaAnalysis';
+import { MultivariateAnalysis, type MultivariateHandle } from './analyses/MultivariateAnalysis';
 import {
   anovaReport,
   chiSquareReport,
@@ -154,6 +155,7 @@ const ANALYSIS_TABS = [
   { id: 'anova', label: 'ANOVA' },
   { id: 'regression', label: 'Regression' },
   { id: 'correlation', label: 'Correlation' },
+  { id: 'multivariate', label: 'Multivariate' },
   { id: 'chisquare', label: 'Chi-Square (χ²)' },
   { id: 'contingency', label: 'Contingency (R×C)' },
   { id: 'nonparamrm', label: 'Non-parametric RM' },
@@ -585,6 +587,7 @@ export default function App() {
 
   const nonParamRepeatedRef = useRef<NonParamRepeatedHandle>(null);
   const repeatedAnovaRef = useRef<RepeatedAnovaHandle>(null);
+  const multivariateRef = useRef<MultivariateHandle>(null);
   const contingencyRef = useRef<ContingencyHandle>(null);
   const sampleSizeRef = useRef<SampleSizeHandle>(null);
   const distFitRef = useRef<DistributionFitHandle>(null);
@@ -623,6 +626,9 @@ export default function App() {
         break;
       case 'repeatedanova':
         repeatedAnovaRef.current?.run();
+        break;
+      case 'multivariate':
+        multivariateRef.current?.run();
         break;
       case 'samplesize':
         sampleSizeRef.current?.run();
@@ -3307,6 +3313,16 @@ export default function App() {
                 {activeAnalysis === 'samplesize' && (
                   <SampleSizeAnalysis
                     ref={sampleSizeRef}
+                    ciLevel={ciLevel}
+                    onOutput={pushOutput}
+                    onError={(message) => showToast('Error', message, 'error')}
+                  />
+                )}
+
+                {activeAnalysis === 'multivariate' && (
+                  <MultivariateAnalysis
+                    ref={multivariateRef}
+                    grid={grid}
                     ciLevel={ciLevel}
                     onOutput={pushOutput}
                     onError={(message) => showToast('Error', message, 'error')}
