@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { ColType, GridData } from './types';
 import { COL_TYPES, validateValue } from './types';
+import { rowMatches, type RowFilter } from './ops';
 
 interface Props {
   grid: GridData;
@@ -17,11 +18,17 @@ interface Props {
   onCopyRange: (range: { r0: number; c0: number; r1: number; c1: number }) => void;
   onClearRange: (range: { r0: number; c0: number; r1: number; c1: number }) => void;
   onFillDown: (range: { r0: number; c0: number; r1: number; c1: number }) => void;
+  onSortCol?: (col: number, dir: 'asc' | 'desc') => void;
+  rowFilter?: RowFilter | null;
+  freezeFirstCol?: boolean;
   focusCell?: { r: number; c: number; stamp: number } | null;
 }
 
 export function DataGrid(props: Props) {
-  const { grid } = props;
+  const { grid, freezeFirstCol } = props;
+  const visibleRows = grid.rows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => rowMatches(grid, row, props.rowFilter ?? null));
   const [editingCol, setEditingCol] = useState<number | null>(null);
   const [draftName, setDraftName] = useState('');
   const [menu, setMenu] = useState<{ kind: 'col' | 'row'; index: number; x: number; y: number } | null>(null);
@@ -78,11 +85,13 @@ export function DataGrid(props: Props) {
         <table className="w-full border-collapse font-mono text-[11px]">
           <thead className="sticky top-0 z-20">
             <tr className="bg-surface2">
-              <th className="w-10 border border-border p-1 text-text3">#</th>
+              <th className={`w-10 border border-border p-1 text-text3 ${freezeFirstCol ? 'sticky left-0 z-30 bg-surface2' : ''}`}>#</th>
               {grid.cols.map((col, i) => (
                 <th
                   key={i}
-                  className="border border-border p-1 text-accent2 min-w-[100px] cursor-context-menu select-none"
+                  className={`border border-border p-1 text-accent2 min-w-[100px] cursor-context-menu select-none ${
+                    freezeFirstCol && i === 0 ? 'sticky left-10 z-20 bg-surface2' : ''
+                  }`}
                   title="Double-click to rename, right-click for column menu"
                   onDoubleClick={() => {
                     setEditingCol(i);
@@ -110,9 +119,14 @@ export function DataGrid(props: Props) {
               ))}
             </tr>
             <tr className="bg-surface2/80 backdrop-blur">
-              <th className="border border-border text-[8px] text-text3 uppercase p-1">Type</th>
+              <th className={`border border-border text-[8px] text-text3 uppercase p-1 ${freezeFirstCol ? 'sticky left-0 z-30 bg-surface2' : ''}`}>Type</th>
               {grid.cols.map((col, i) => (
-                <th key={i} className="border border-border p-0">
+                <th
+                  key={i}
+                  className={`border border-border p-0 ${
+                    freezeFirstCol && i === 0 ? 'sticky left-10 z-20 bg-surface2' : ''
+                  }`}
+                >
                   <select
                     className="w-full bg-transparent border-none text-accent2 text-[10px] font-semibold p-1 outline-none appearance-none text-center cursor-pointer hover:bg-white/5"
                     value={col.type}
@@ -129,10 +143,22 @@ export function DataGrid(props: Props) {
             </tr>
           </thead>
           <tbody>
-            {grid.rows.map((row, rIdx) => (
+            {visibleRows.length === 0 && (
+              <tr>
+                <td
+                  colSpan={grid.cols.length + 1}
+                  className="border border-border p-4 text-center text-text3 italic"
+                >
+                  No rows match the active filter
+                </td>
+              </tr>
+            )}
+            {visibleRows.map(({ row, index: rIdx }) => (
               <tr key={rIdx} className="hover:bg-white/5 transition-colors">
                 <td
-                  className="border border-border text-center text-text3 bg-surface2/30 cursor-context-menu select-none"
+                  className={`border border-border text-center text-text3 bg-surface2/30 cursor-context-menu select-none ${
+                    freezeFirstCol ? 'sticky left-0 z-10 bg-surface2' : ''
+                  }`}
                   title="Right-click for row menu"
                   onContextMenu={(e) => openMenu(e, 'row', rIdx)}
                 >
@@ -142,7 +168,14 @@ export function DataGrid(props: Props) {
                   const isValid = validateValue(cell, grid.cols[cIdx]?.type ?? 'str');
                   const selected = inSel(rIdx, cIdx);
                   return (
-                    <td key={cIdx} className={`border border-border p-0 relative ${selected ? 'outline outline-1 outline-accent' : ''}`}>
+                    <td
+                      key={cIdx}
+                      className={`border border-border p-0 relative ${
+                        selected ? 'outline outline-1 outline-accent' : ''
+                      } ${
+                        freezeFirstCol && cIdx === 0 ? 'sticky left-10 z-10 bg-bg' : ''
+                      }`}
+                    >
                       <input
                         type="text"
                         data-cell={`${rIdx}-${cIdx}`}
@@ -167,7 +200,14 @@ export function DataGrid(props: Props) {
                         onChange={(e) => props.onCell(rIdx, cIdx, e.target.value)}
                         onKeyDown={(e) => {
                           const move = (dr: number, dc: number) => {
-                            const nr = Math.max(0, Math.min(grid.rows.length - 1, rIdx + dr));
+                            // Navigate over the visible (filtered) rows, not the
+                            // raw indexes, or arrow keys land on hidden cells.
+                            let nr = rIdx;
+                            if (dr !== 0) {
+                              const pos = visibleRows.findIndex((entry) => entry.index === rIdx);
+                              const next = Math.max(0, Math.min(visibleRows.length - 1, pos + dr));
+                              nr = visibleRows[next]?.index ?? rIdx;
+                            }
                             const nc = Math.max(0, Math.min(grid.cols.length - 1, cIdx + dc));
                             if (e.shiftKey && anchor) {
                               setSel({ r0: anchor.r, c0: anchor.c, r1: nr, c1: nc });
@@ -220,6 +260,21 @@ export function DataGrid(props: Props) {
         >
           {menu.kind === 'col' ? (
             <>
+              <MenuItem
+                label="Sort ascending"
+                onClick={() => {
+                  props.onSortCol?.(menu.index, 'asc');
+                  setMenu(null);
+                }}
+              />
+              <MenuItem
+                label="Sort descending"
+                onClick={() => {
+                  props.onSortCol?.(menu.index, 'desc');
+                  setMenu(null);
+                }}
+              />
+              <div className="h-px bg-border my-1" />
               <MenuItem label="Insert column left" onClick={() => props.onInsertCol(menu.index)} />
               <MenuItem label="Insert column right" onClick={() => props.onInsertCol(menu.index + 1)} />
               <MenuItem label="Duplicate column" onClick={() => props.onDuplicateCol(menu.index)} />

@@ -13,6 +13,10 @@ LazStats JS provides a spreadsheet-like data editor and a full suite of parametr
 - Per-cell regex validation
 - **CSV import/export** with quoted fields, comma or semicolon delimiters, decimal-comma normalisation and automatic column-type inference
 - Row/column count displayed in status bar
+- **Freeze first column** (plus row numbers) while scrolling wide sheets; the header row is always sticky
+- **View-only row filter** with type-aware operators (contains, =, ≠, >, ≥, <, ≤, empty/non-empty) and a live `visible / total` count — analyses still use every row
+- **Sort ascending/descending per column** from the column context menu (undoable)
+- **Find & replace** with regex, case sensitivity and single-column scope; whitespace trim, duplicates/empty-row cleanup and mean/median/mode imputation live in the Clean panel
 
 ### Project persistence
 - **Silent autosave** of the grid, CI level, analysis parameters and IO preferences to `localStorage` (debounced), restored automatically on the next visit

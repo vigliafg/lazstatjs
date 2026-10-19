@@ -55,6 +55,12 @@ VIF e Breusch-Pagan già presenti. Audit puntuale di `regression.ts` prima di de
   precedente. Restano fuori anche i parametri interni dei pannelli in
   `src/analyses/`.
 
+- **#7 UX griglia — fatto (2026-10-19):** freeze della prima colonna (con colonna
+  numeri riga), filtro righe view-only con operatori type-aware e conteggio
+  live, ordinamento asc/desc dal menu di colonna. Ricerca-sostituisci e sort
+  esistevano già nei pannelli Clean/Transform; il filtro non tocca i dati usati
+  dalle analisi (`rowMatchesFilter` in `src/grid/ops.ts`).
+
 ## Contratto per nuove analisi
 Builder puro in `src/stats/` + reference test contro SciPy/R + `ReportSpec`
 auto-generato. Verifica: `npm run lint` + `npm test` (copre stats+io+grid).

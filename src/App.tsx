@@ -92,6 +92,10 @@ import {
   rangeToTsv as gridRangeToTsv,
   clearRange as gridClearRange,
   fillDownRange as gridFillDown,
+  sortByColumn as gridSortByColumn,
+  filterRowIndexes as gridFilterIndexes,
+  type RowFilter,
+  type RowFilterOp,
 } from './grid/ops';
 import { DataGrid } from './grid/DataGrid';
 import { CleanPanel } from './grid/CleanPanel';
@@ -200,6 +204,11 @@ export default function App() {
   const [selRange, setSelRange] = useState<{ r0: number; c0: number; r1: number; c1: number } | null>(null);
   const [showClean, setShowClean] = useState(false);
   const [showTransform, setShowTransform] = useState(false);
+  const [freezeFirstCol, setFreezeFirstCol] = useState(false);
+  const [showFilter, setShowFilter] = useState(false);
+  const [filterCol, setFilterCol] = useState(0);
+  const [filterOp, setFilterOp] = useState<RowFilterOp>('contains');
+  const [filterValue, setFilterValue] = useState('');
   // Keep a validation run live: recompute counts/jump targets as the user
   // fixes cells instead of showing stale indexes.
   useEffect(() => {
@@ -209,6 +218,12 @@ export default function App() {
   }, [grid]);
   // Selection bar holds raw indexes: clamp them after delete/merge/paste so
   // Fill/Copy/Clear never address rows/cols that no longer exist.
+  // Column indexes in the filter bar go stale after delete/merge.
+  useEffect(() => {
+    const max = Math.max(0, grid.cols.length - 1);
+    if (filterCol > max) setFilterCol(max);
+  }, [grid.cols.length, filterCol]);
+
   useEffect(() => {
     if (!selRange) return;
     const maxR = Math.max(0, grid.rows.length - 1);
@@ -434,6 +449,15 @@ export default function App() {
   // writes on mount/StrictMode re-runs and keeps mounts from clobbering a
   // newer tab with identical content.
   const lastSavedProject = useRef<string | null>(boot ? serializeProject(boot) : null);
+
+  const filterNeedsValue = filterOp !== 'empty' && filterOp !== 'notEmpty';
+  const activeRowFilter: RowFilter | null =
+    showFilter && grid.cols.length > 0 && (!filterNeedsValue || filterValue.trim() !== '')
+      ? { col: Math.min(filterCol, grid.cols.length - 1), op: filterOp, value: filterValue }
+      : null;
+  const visibleRowCount = activeRowFilter
+    ? gridFilterIndexes(grid, activeRowFilter).length
+    : grid.rows.length;
 
   const buildProject = (): ProjectSnapshot =>
     createProjectSnapshot({
@@ -2490,7 +2514,73 @@ export default function App() {
               <button className={`tb-btn ${showTransform ? 'bg-accent text-white border-accent' : ''}`} onClick={() => setShowTransform((v) => !v)}>
                 Transform
               </button>
+              <div className="h-4 w-px bg-border mx-1" />
+              <button
+                className={`tb-btn ${freezeFirstCol ? 'bg-accent text-white border-accent' : ''}`}
+                onClick={() => setFreezeFirstCol((v) => !v)}
+                title="Keep the row numbers and the first column visible while scrolling"
+              >
+                Freeze col
+              </button>
+              <button
+                className={`tb-btn ${showFilter ? 'bg-accent text-white border-accent' : ''}`}
+                onClick={() => setShowFilter((v) => !v)}
+                title="Filter the rows shown in the grid (view only, data unchanged)"
+              >
+                Filter
+              </button>
             </div>
+
+            {showFilter && (
+              <div className="bg-surface border-b border-border px-3 py-1.5 flex flex-wrap items-center gap-2 text-[11px] shrink-0">
+                <span className="font-mono text-[9px] text-text3 uppercase tracking-widest">Row filter</span>
+                <select
+                  className="bg-surface3 border border-border2 rounded px-1 py-1 text-text"
+                  value={filterCol}
+                  onChange={(e) => setFilterCol(Number(e.target.value))}
+                >
+                  {grid.cols.map((c, i) => (
+                    <option key={i} value={i}>{c.name}</option>
+                  ))}
+                </select>
+                <select
+                  className="bg-surface3 border border-border2 rounded px-1 py-1 text-text"
+                  value={filterOp}
+                  onChange={(e) => setFilterOp(e.target.value as RowFilterOp)}
+                >
+                  <option value="contains">contains</option>
+                  <option value="equals">=</option>
+                  <option value="notEquals">≠</option>
+                  <option value="gt">&gt;</option>
+                  <option value="gte">≥</option>
+                  <option value="lt">&lt;</option>
+                  <option value="lte">≤</option>
+                  <option value="empty">is empty</option>
+                  <option value="notEmpty">is not empty</option>
+                </select>
+                {filterNeedsValue && (
+                  <input
+                    className="bg-surface3 border border-border2 rounded px-2 py-1 w-40 text-text"
+                    placeholder="Value"
+                    value={filterValue}
+                    onChange={(e) => setFilterValue(e.target.value)}
+                  />
+                )}
+                <span className="text-text3 font-mono text-[10px]">
+                  {visibleRowCount} / {grid.rows.length} rows
+                </span>
+                <button
+                  className="tb-btn"
+                  onClick={() => {
+                    setFilterValue('');
+                    setFilterOp('contains');
+                  }}
+                >
+                  Clear filter
+                </button>
+                <span className="text-text3 text-[10px] italic">view only — analyses still use all rows</span>
+              </div>
+            )}
 
             {showTransform && (
               <TransformPanel
@@ -2606,6 +2696,13 @@ export default function App() {
               }}
               onClearRange={(range) => setGrid((prev) => gridClearRange(prev, range))}
               onFillDown={(range) => setGrid((prev) => gridFillDown(prev, range))}
+              freezeFirstCol={freezeFirstCol}
+              rowFilter={activeRowFilter}
+              onSortCol={(col, dir) => {
+                setGrid((prev) => gridSortByColumn(prev, col, dir));
+                setValidation({ ran: false, issues: [] });
+                showToast('Sort', `Sorted by ${grid.cols[col]?.name ?? `column ${col + 1}`} (${dir})`, 'ok');
+              }}
             />
             {selRange && (
               <div className="bg-surface border-t border-border px-3 py-1 flex items-center gap-2 text-[10px] font-mono text-text3 shrink-0">

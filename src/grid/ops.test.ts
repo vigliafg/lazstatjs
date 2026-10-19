@@ -5,7 +5,7 @@ import {
   insertRowAt, deleteRow, clearGrid, pasteTsvAt, parseTsv, fillDownRange, clearRange,
   coerceGrid, coerceValue, findReplace, trimGrid, removeEmptyRows, removeDuplicateRows,
   fillMissing, findInvalid, sortByColumn, recodeColumn, splitColumn,
-  mergeColumns, computeColumn,
+  mergeColumns, computeColumn, rowMatchesFilter, filterRowIndexes, rowMatches,
 } from './ops';
 import type { GridData } from './types';
 
@@ -82,6 +82,24 @@ describe('grid ops foundation', () => {
     const { filled, fillWith } = fillMissing(g, 0, 'mean');
     assert.equal(filled, 1);
     assert.equal(fillWith, '3');
+  });
+
+  it('row filters are type-aware and view-only', () => {
+    const g: GridData = {
+      cols: [{ name: 'Name', type: 'str' }, { name: 'Score', type: 'num' }],
+      rows: [['Ann', '12'], ['Bob', '7'], ['ann', ''], ['Cara', '12.5']],
+    };
+    const names = (filter: Parameters<typeof filterRowIndexes>[1]) => filterRowIndexes(g, filter);
+    assert.deepEqual(names({ col: 0, op: 'contains', value: 'an' }), [0, 2]);
+    assert.deepEqual(names({ col: 0, op: 'equals', value: 'ann' }), [0, 2]);
+    assert.deepEqual(names({ col: 0, op: 'equals', value: 'Ann', caseSensitive: true }), [0]);
+    assert.deepEqual(names({ col: 1, op: 'gt', value: '10' }), [0, 3]);
+    assert.deepEqual(names({ col: 1, op: 'lte', value: '7' }), [1]);
+    assert.deepEqual(names({ col: 1, op: 'empty', value: '' }), [2]);
+    assert.deepEqual(names({ col: 1, op: 'notEmpty', value: '' }), [0, 1, 3]);
+    assert.equal(rowMatches(g, g.rows[0], null), true);
+    assert.equal(rowMatches(g, g.rows[0], { col: 9, op: 'contains', value: 'x' }), true);
+    assert.equal(rowMatchesFilter(g.rows[0], { col: 1, op: 'gt', value: 'nope' }), false);
   });
 
   it('sort keeps nulls last', () => {

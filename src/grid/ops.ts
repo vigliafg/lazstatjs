@@ -170,6 +170,60 @@ export const fillDownRange = (grid: GridData, range: Range): GridData => {
   return { cols: grid.cols, rows };
 };
 
+/* ---------- View filtering ---------- */
+
+export type RowFilterOp =
+  | 'contains'
+  | 'equals'
+  | 'notEquals'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'empty'
+  | 'notEmpty';
+
+export interface RowFilter {
+  col: number;
+  op: RowFilterOp;
+  value: string;
+  caseSensitive?: boolean;
+}
+
+/** Case-insensitive by default; numeric comparison only when both sides parse. */
+export const rowMatchesFilter = (row: string[], filter: RowFilter): boolean => {
+  const raw = String(row[filter.col] ?? '').trim();
+  if (filter.op === 'empty') return raw === '';
+  if (filter.op === 'notEmpty') return raw !== '';
+
+  const needle = filter.value.trim();
+  if (needle === '') return true;
+  const a = filter.caseSensitive ? raw : raw.toLowerCase();
+  const b = filter.caseSensitive ? needle : needle.toLowerCase();
+
+  if (filter.op === 'contains') return a.includes(b);
+  if (filter.op === 'equals') return a === b;
+  if (filter.op === 'notEquals') return a !== b;
+
+  const na = numVal(raw);
+  const nb = numVal(needle);
+  if (na === null || nb === null) return false;
+  if (filter.op === 'gt') return na > nb;
+  if (filter.op === 'gte') return na >= nb;
+  if (filter.op === 'lt') return na < nb;
+  return na <= nb;
+};
+
+export const rowMatches = (grid: GridData, row: string[], filter: RowFilter | null): boolean =>
+  !filter || filter.col < 0 || filter.col >= grid.cols.length || rowMatchesFilter(row, filter);
+
+/** Row indexes (original positions) that pass the filter, in grid order. */
+export const filterRowIndexes = (grid: GridData, filter: RowFilter | null): number[] =>
+  grid.rows.reduce<number[]>((out, row, index) => {
+    if (rowMatches(grid, row, filter)) out.push(index);
+    return out;
+  }, []);
+
 /* ---------- Cleaning ---------- */
 
 export interface ValidationIssue {
