@@ -39,6 +39,7 @@ import {
 } from './analyses/NonParamRepeatedAnalysis';
 import { RepeatedAnovaAnalysis, type RepeatedAnovaHandle } from './analyses/RepeatedAnovaAnalysis';
 import { MultivariateAnalysis, type MultivariateHandle } from './analyses/MultivariateAnalysis';
+import { AncovaAnalysis, type AncovaHandle } from './analyses/AncovaAnalysis';
 import {
   anovaReport,
   chiSquareReport,
@@ -163,6 +164,7 @@ const ANALYSIS_TABS = [
   { id: 'samplesize', label: 'Sample Size / Power' },
   { id: 'distfit', label: 'Distribution Fit' },
   { id: 'factorial', label: 'Factorial ANOVA' },
+  { id: 'ancova', label: 'ANCOVA' },
   { id: 'logistic', label: 'Logistic Regression' },
   { id: 'timeseries', label: 'Time Series' },
   { id: 'survival', label: 'Survival (KM)' },
@@ -588,6 +590,7 @@ export default function App() {
   const nonParamRepeatedRef = useRef<NonParamRepeatedHandle>(null);
   const repeatedAnovaRef = useRef<RepeatedAnovaHandle>(null);
   const multivariateRef = useRef<MultivariateHandle>(null);
+  const ancovaRef = useRef<AncovaHandle>(null);
   const contingencyRef = useRef<ContingencyHandle>(null);
   const sampleSizeRef = useRef<SampleSizeHandle>(null);
   const distFitRef = useRef<DistributionFitHandle>(null);
@@ -629,6 +632,9 @@ export default function App() {
         break;
       case 'multivariate':
         multivariateRef.current?.run();
+        break;
+      case 'ancova':
+        ancovaRef.current?.run();
         break;
       case 'samplesize':
         sampleSizeRef.current?.run();
@@ -3313,6 +3319,16 @@ export default function App() {
                 {activeAnalysis === 'samplesize' && (
                   <SampleSizeAnalysis
                     ref={sampleSizeRef}
+                    ciLevel={ciLevel}
+                    onOutput={pushOutput}
+                    onError={(message) => showToast('Error', message, 'error')}
+                  />
+                )}
+
+                {activeAnalysis === 'ancova' && (
+                  <AncovaAnalysis
+                    ref={ancovaRef}
+                    grid={grid}
                     ciLevel={ciLevel}
                     onOutput={pushOutput}
                     onError={(message) => showToast('Error', message, 'error')}
