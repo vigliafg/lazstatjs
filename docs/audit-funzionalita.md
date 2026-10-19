@@ -46,10 +46,14 @@ VIF e Breusch-Pagan già presenti. Audit puntuale di `regression.ts` prima di de
   da ogni tabella, download PNG di tutti i grafici (2×, sfondo scuro) e report
   HTML autonomo con CSS di stampa. Moduli `src/io/tableTsv.ts`,
   `src/io/chartExport.ts`, `src/io/reportExport.ts`, `src/io/clipboard.ts`.
-- **#1 Persistenza progetto — ancora aperta:** l'output console contiene nodi
-  React, quindi il salvataggio di grid+output richiede prima un modello
-  serializzabile dei run (tabelle, grafici, report) oppure si limita a
-  grid+parametri+prefs con autosave.
+- **#1 Persistenza progetto — fatto per dati+parametri (2026-10-19):** autosave
+  debounced su `localStorage` con ripristino al primo render, file `.lzs`
+  versionato con validazione (griglia, prefs IO, CI, analisi attiva e parametri
+  App-level) in `src/io/project.ts`. L'output console resta escluso: contiene
+  nodi React e richiede un modello serializzabile dei run (tabelle, grafici,
+  report); al caricamento viene svuotato per non mostrare numeri del dataset
+  precedente. Restano fuori anche i parametri interni dei pannelli in
+  `src/analyses/`.
 
 ## Contratto per nuove analisi
 Builder puro in `src/stats/` + reference test contro SciPy/R + `ReportSpec`

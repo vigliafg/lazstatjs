@@ -20,21 +20,24 @@ export const DEFAULT_PREFS: IoPreferences = {
 
 const KEY = 'lazstats.io.prefs.v1';
 
+/** Sanitize partial/corrupted preferences into a usable object. */
+export const normalizePrefs = (parsed: Partial<IoPreferences>): IoPreferences => {
+  const merged = { ...DEFAULT_PREFS, ...parsed };
+  // Corrupted or hand-edited values must never reach the IO pipeline.
+  if (!['auto', ',', ';', 'tab', '\t', '|'].includes(merged.delimiter)) merged.delimiter = DEFAULT_PREFS.delimiter;
+  if (merged.decimalSeparator !== '.' && merged.decimalSeparator !== ',') merged.decimalSeparator = DEFAULT_PREFS.decimalSeparator;
+  if (!['csv', 'tsv', 'pipe', 'json', 'spss'].includes(merged.exportFormat)) merged.exportFormat = DEFAULT_PREFS.exportFormat;
+  merged.hasHeader = merged.hasHeader !== false;
+  merged.includeHeader = merged.includeHeader !== false;
+  merged.dropEmptyRows = merged.dropEmptyRows !== false;
+  return merged;
+};
+
 export const loadPrefs = (): IoPreferences => {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return { ...DEFAULT_PREFS };
-    const parsed = JSON.parse(raw) as Partial<IoPreferences>;
-    const merged = { ...DEFAULT_PREFS, ...parsed };
-    // Sanitize: corrupted or hand-edited storage must never leak
-    // invalid values into the import/export pipeline.
-    if (!['auto', ',', ';', 'tab', '\t', '|'].includes(merged.delimiter)) merged.delimiter = DEFAULT_PREFS.delimiter;
-    if (merged.decimalSeparator !== '.' && merged.decimalSeparator !== ',') merged.decimalSeparator = DEFAULT_PREFS.decimalSeparator;
-    if (!['csv', 'tsv', 'pipe', 'json', 'spss'].includes(merged.exportFormat)) merged.exportFormat = DEFAULT_PREFS.exportFormat;
-    merged.hasHeader = merged.hasHeader !== false;
-    merged.includeHeader = merged.includeHeader !== false;
-    merged.dropEmptyRows = merged.dropEmptyRows !== false;
-    return merged;
+    return normalizePrefs(JSON.parse(raw) as Partial<IoPreferences>);
   } catch {
     return { ...DEFAULT_PREFS };
   }

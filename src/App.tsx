@@ -103,6 +103,21 @@ import { looksLikeJson } from './io/detect';
 import { readDelimitedTable, readJsonTable } from './io/readers';
 import { downloadText } from './io/writers';
 import { loadPrefs, savePrefs } from './io/prefs';
+import {
+  DEFAULT_PARAMS,
+  DEFAULT_SETTINGS,
+  createProjectSnapshot,
+  loadAutosaveProject,
+  parseProject,
+  saveAutosaveText,
+  serializeProject,
+  type AnovaParams,
+  type ChiSqParams,
+  type CorrParams,
+  type ProjectSnapshot,
+  type RegParams,
+  type TTestParams,
+} from './io/project';
 import { copyText } from './io/clipboard';
 import { exportChartsAsPng } from './io/chartExport';
 import { buildReportFromElement } from './io/reportExport';
@@ -117,6 +132,24 @@ interface AnalysisConfig {
 // --- Constants ---
 const PALETTE = ['#4f9cf9', '#34d399', '#f87171', '#fbbf24', '#a78bfa', '#38bdf8', '#fb923c', '#e879f9'];
 
+const ANALYSIS_TABS = [
+  { id: 'wizard', label: 'Wizard' },
+  { id: 'descriptive', label: 'Descriptive' },
+  { id: 'ttest', label: 'T-Test' },
+  { id: 'anova', label: 'ANOVA' },
+  { id: 'regression', label: 'Regression' },
+  { id: 'correlation', label: 'Correlation' },
+  { id: 'chisquare', label: 'Chi-Square (χ²)' },
+  { id: 'contingency', label: 'Contingency (R×C)' },
+  { id: 'samplesize', label: 'Sample Size / Power' },
+  { id: 'distfit', label: 'Distribution Fit' },
+  { id: 'factorial', label: 'Factorial ANOVA' },
+  { id: 'logistic', label: 'Logistic Regression' },
+  { id: 'timeseries', label: 'Time Series' },
+  { id: 'survival', label: 'Survival (KM)' },
+  { id: 'cox', label: 'Cox (PH)' },
+];
+
 // --- Helper Functions ---
 const fmt = (x: number, d = 4) => {
   if (isNaN(x) || !isFinite(x)) return '—';
@@ -129,22 +162,33 @@ const fmtP = (p: number) => {
   return p.toFixed(4);
 };
 
+const createDefaultGrid = (): GridData => ({
+  cols: [
+    { name: 'Score_Pre', type: 'num' },
+    { name: 'Score_Post', type: 'num' },
+    { name: 'Group', type: 'int' },
+    { name: 'Age', type: 'int' }
+  ],
+  rows: Array.from({ length: 20 }, (_, i) => {
+    if (i < 10) return [(50 + i * 2).toString(), (60 + i * 2.5).toString(), '1', (20 + (i % 3)).toString()];
+    if (i < 20) return [(45 + (i - 10) * 3).toString(), (55 + (i - 10) * 2).toString(), '2', (21 + (i % 2)).toString()];
+    return ['', '', '', ''];
+  })
+});
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'data' | 'analysis' | 'settings'>('data');
-  const [activeAnalysis, setActiveAnalysis] = useState<string>('wizard');
-  const gridHistory = useGridHistory({
-    cols: [
-      { name: 'Score_Pre', type: 'num' },
-      { name: 'Score_Post', type: 'num' },
-      { name: 'Group', type: 'int' },
-      { name: 'Age', type: 'int' }
-    ],
-    rows: Array.from({ length: 20 }, (_, i) => {
-      if (i < 10) return [(50 + i * 2).toString(), (60 + i * 2.5).toString(), '1', (20 + (i % 3)).toString()];
-      if (i < 20) return [(45 + (i - 10) * 3).toString(), (55 + (i - 10) * 2).toString(), '2', (21 + (i % 2)).toString()];
-      return ['', '', '', ''];
-    })
-  });
+  // Restore the last silent autosave before any state is initialised, so the
+  // first render already shows the user's grid and parameters.
+  const [boot] = useState<ProjectSnapshot | null>(() => loadAutosaveProject());
+  const [activeTab, setActiveTab] = useState<'data' | 'analysis' | 'settings'>(
+    boot?.settings.activeTab ?? DEFAULT_SETTINGS.activeTab
+  );
+  const [activeAnalysis, setActiveAnalysis] = useState<string>(() =>
+    boot && ANALYSIS_TABS.some((tab) => tab.id === boot.settings.activeAnalysis)
+      ? boot.settings.activeAnalysis
+      : DEFAULT_SETTINGS.activeAnalysis
+  );
+  const gridHistory = useGridHistory(boot?.grid ?? createDefaultGrid());
   const grid = gridHistory.grid;
   const setGrid = gridHistory.commit;
   const undoGrid = gridHistory.undo;
@@ -248,7 +292,7 @@ export default function App() {
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [pendingImport, setPendingImport] = useState<{ fileName: string; text: string } | null>(null);
   const [showExport, setShowExport] = useState(false);
-  const [ioPrefs, setIoPrefs] = useState(() => loadPrefs());
+  const [ioPrefs, setIoPrefs] = useState(() => boot?.prefs ?? loadPrefs());
 
   const applyImportTable = (table: ImportTable, mode: ImportMode) => {
     if (mode === 'overwrite') {
@@ -356,50 +400,138 @@ export default function App() {
     setShowExport(true);
   };
 
-  const [descVars, setDescVars] = useState<number[]>([0, 1]);
-  const [ciLevel, setCiLevel] = useState(95);
-  const [ttestParams, setTTestParams] = useState({
-    type: 'ind' as 'ind' | 'dep' | 'one',
-    var1: 0,
-    var2: 1,
-    mu: 0,
-    useNonParam: true,
-    equalVar: true
-  });
+  const [descVars, setDescVars] = useState<number[]>(
+    boot?.params.descVars ?? DEFAULT_PARAMS.descVars
+  );
+  const [ciLevel, setCiLevel] = useState(boot?.settings.ciLevel ?? DEFAULT_SETTINGS.ciLevel);
+  const [ttestParams, setTTestParams] = useState<TTestParams>(
+    boot?.params.ttest ?? DEFAULT_PARAMS.ttest
+  );
 
-  const [anovaParams, setAnovaParams] = useState({
-    dep: 0,
-    grp: 2,
-    posthoc: 'holm',
-    useNonParam: true,
-    kwPosthoc: 'bonferroni' as 'none' | 'bonferroni' | 'holm'
-  });
+  const [anovaParams, setAnovaParams] = useState<AnovaParams>(
+    boot?.params.anova ?? DEFAULT_PARAMS.anova
+  );
 
-  const [regParams, setRegParams] = useState({
-    dep: 1,
-    indeps: [0] as number[],
-    useNonParam: true,
-    robustEstimator: 'theilsen'
-  });
+  const [regParams, setRegParams] = useState<RegParams>(
+    boot?.params.reg ?? DEFAULT_PARAMS.reg
+  );
 
-  const [corrParams, setCorrParams] = useState({
-    vars: [0, 1] as number[],
-    method: 'pearson',
-    showSpearman: true,
-    showKendall: true
-  });
+  const [corrParams, setCorrParams] = useState<CorrParams>(
+    boot?.params.corr ?? DEFAULT_PARAMS.corr
+  );
 
-  const [chisqParams, setChisqParams] = useState({
-    row1col1: 30,
-    row1col2: 20,
-    row2col1: 15,
-    row2col2: 35,
-    row1Label: 'Group A',
-    row2Label: 'Group B',
-    col1Label: 'Success',
-    col2Label: 'Failure',
-    runFisherExact: true
-  });
+  const [chisqParams, setChisqParams] = useState<ChiSqParams>(
+    boot?.params.chisq ?? DEFAULT_PARAMS.chisq
+  );
+
+  // --- Project persistence (.lzs + silent autosave) ---
+  const projectInputRef = useRef<HTMLInputElement>(null);
+  const [lastAutosave, setLastAutosave] = useState<string | null>(() =>
+    boot ? new Date(boot.savedAt).toLocaleTimeString() : null
+  );
+  const autosaveWarned = useRef(false);
+  // Canonical serialization of what is already stored: avoids redundant
+  // writes on mount/StrictMode re-runs and keeps mounts from clobbering a
+  // newer tab with identical content.
+  const lastSavedProject = useRef<string | null>(boot ? serializeProject(boot) : null);
+
+  const buildProject = (): ProjectSnapshot =>
+    createProjectSnapshot({
+      grid,
+      prefs: ioPrefs,
+      settings: { ciLevel, activeAnalysis, activeTab },
+      params: {
+        descVars,
+        ttest: ttestParams,
+        anova: anovaParams,
+        reg: regParams,
+        corr: corrParams,
+        chisq: chisqParams,
+      },
+    });
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const snapshot = buildProject();
+      const json = serializeProject(snapshot);
+      if (json === lastSavedProject.current) return;
+      if (saveAutosaveText(json)) {
+        lastSavedProject.current = json;
+        autosaveWarned.current = false;
+        setLastAutosave(new Date().toLocaleTimeString());
+      } else if (!autosaveWarned.current) {
+        // Quota exceeded or oversized grid: warn once, not on every keystroke.
+        autosaveWarned.current = true;
+        setLastAutosave(null);
+        showToast('Autosave', 'Autosave unavailable (storage full or data too large) — use Save project', 'warn');
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grid, ioPrefs, ciLevel, activeAnalysis, activeTab, descVars, ttestParams, anovaParams, regParams, corrParams, chisqParams]);
+
+  const applyProject = (project: ProjectSnapshot) => {
+    resetGridHistory(project.grid);
+    setDescVars(project.params.descVars);
+    setTTestParams(project.params.ttest);
+    setAnovaParams(project.params.anova);
+    setRegParams(project.params.reg);
+    setCorrParams(project.params.corr);
+    setChisqParams(project.params.chisq);
+    setCiLevel(project.settings.ciLevel);
+    setActiveAnalysis(
+      ANALYSIS_TABS.some((tab) => tab.id === project.settings.activeAnalysis)
+        ? project.settings.activeAnalysis
+        : DEFAULT_SETTINGS.activeAnalysis
+    );
+    setActiveTab(project.settings.activeTab);
+    setIoPrefs(project.prefs);
+    savePrefs(project.prefs);
+    // Results belong to the previous grid: keeping them would show numbers
+    // that no longer match the restored data.
+    setOutputs([]);
+    setValidation({ ran: false, issues: [] });
+    setSelRange(null);
+    setFocusCell(null);
+    setLastAutosave(new Date().toLocaleTimeString());
+    showToast(
+      'Project',
+      `Loaded ${nonEmptyRowCount(project.grid.rows)} rows — rerun the analyses to rebuild the output console`,
+      'ok'
+    );
+  };
+
+  const saveProjectFile = () => {
+    downloadText(
+      serializeProject(buildProject()),
+      'lazstats-project.lzs',
+      'application/json;charset=utf-8'
+    );
+    showToast('Project', 'Project saved as .lzs', 'ok');
+  };
+
+  const openProjectFile = async (file: File) => {
+    try {
+      if (file.size > 25_000_000) throw new Error('The project file is too large');
+      const project = parseProject(await file.text());
+      if (!window.confirm(`Load "${file.name}"? The current grid will be replaced and the output console cleared.`)) {
+        return;
+      }
+      applyProject(project);
+    } catch (error) {
+      showToast('Project', error instanceof Error ? error.message : 'Could not read the project', 'error');
+    }
+  };
+
+  const bootNoticeShown = useRef(false);
+  useEffect(() => {
+    if (bootNoticeShown.current) return;
+    bootNoticeShown.current = true;
+    if (boot) {
+      showToast('Session', `Restored ${nonEmptyRowCount(boot.grid.rows)} rows from the last session`, 'ok');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const contingencyRef = useRef<ContingencyHandle>(null);
   const sampleSizeRef = useRef<SampleSizeHandle>(null);
@@ -2231,7 +2363,7 @@ export default function App() {
     const html = buildReportFromElement(el, {
       title: 'LazStats JS — Analysis Report',
       generatedAt: new Date().toLocaleString(),
-      details: [`${nonEmptyRowCount(grid)} rows`, `${grid.cols.length} columns`, `CI ${ciLevel}%`],
+      details: [`${nonEmptyRowCount(grid.rows)} rows`, `${grid.cols.length} columns`, `CI ${ciLevel}%`],
     });
     downloadText(html, 'lazstats-report.html', 'text/html;charset=utf-8');
     showToast('Report', 'Printable report downloaded — open it and print to PDF', 'ok');
@@ -2268,11 +2400,45 @@ export default function App() {
       <main className="flex-1 overflow-hidden flex flex-col">
         {activeTab === 'data' && (
           <div className="flex-1 flex flex-col overflow-hidden">
-            <div className="bg-surface border-b border-border p-1.5 flex items-center gap-2 shrink-0">
+            <div className="bg-surface border-b border-border p-1.5 flex flex-wrap items-center gap-2 shrink-0">
               <span className="font-mono text-[10px] text-text3 uppercase tracking-widest px-2">File:</span>
               <button className="tb-btn" onClick={() => resetGridHistory(makeNewGrid())}>New</button>
               <button className="tb-btn" onClick={() => csvInputRef.current?.click()}>Import</button>
               <button className="tb-btn" onClick={exportCsv}>Export</button>
+              <div className="h-4 w-px bg-border mx-1" />
+              <button
+                className="tb-btn"
+                onClick={saveProjectFile}
+                title="Save grid, settings and analysis parameters as a .lzs project"
+              >
+                Save project
+              </button>
+              <button
+                className="tb-btn"
+                onClick={() => projectInputRef.current?.click()}
+                title="Open a .lzs project and replace the current session"
+              >
+                Open project
+              </button>
+              <input
+                ref={projectInputRef}
+                type="file"
+                accept=".lzs,application/json"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void openProjectFile(file);
+                  event.target.value = '';
+                }}
+              />
+              {lastAutosave && (
+                <span
+                  className="font-mono text-[9px] text-text3 uppercase tracking-wider"
+                  title="Grid, settings and parameters are autosaved in this browser"
+                >
+                  Autosave {lastAutosave}
+                </span>
+              )}
               <div className="h-4 w-px bg-border mx-1" />
               <button className="tb-btn" disabled={!canUndoGrid} onClick={undoGrid} title="Undo (Ctrl+Z)">
                 Undo
@@ -2485,23 +2651,7 @@ export default function App() {
           <div className="flex-1 flex flex-col overflow-hidden">
             <div className="bg-surface border-b border-border shrink-0">
               <div className="flex overflow-x-auto scrollbar">
-                {[
-                  { id: 'wizard', label: 'Wizard' },
-                  { id: 'descriptive', label: 'Descriptive' },
-                  { id: 'ttest', label: 'T-Test' },
-                  { id: 'anova', label: 'ANOVA' },
-                  { id: 'regression', label: 'Regression' },
-                  { id: 'correlation', label: 'Correlation' },
-                  { id: 'chisquare', label: 'Chi-Square (χ²)' },
-                  { id: 'contingency', label: 'Contingency (R×C)' },
-                  { id: 'samplesize', label: 'Sample Size / Power' },
-                  { id: 'distfit', label: 'Distribution Fit' },
-                  { id: 'factorial', label: 'Factorial ANOVA' },
-                  { id: 'logistic', label: 'Logistic Regression' },
-                  { id: 'timeseries', label: 'Time Series' },
-                  { id: 'survival', label: 'Survival (KM)' },
-                  { id: 'cox', label: 'Cox (PH)' }
-                ].map(a => (
+                {ANALYSIS_TABS.map(a => (
                   <button 
                     key={a.id}
                     onClick={() => setActiveAnalysis(a.id)}

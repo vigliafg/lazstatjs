@@ -14,6 +14,11 @@ LazStats JS provides a spreadsheet-like data editor and a full suite of parametr
 - **CSV import/export** with quoted fields, comma or semicolon delimiters, decimal-comma normalisation and automatic column-type inference
 - Row/column count displayed in status bar
 
+### Project persistence
+- **Silent autosave** of the grid, CI level, analysis parameters and IO preferences to `localStorage` (debounced), restored automatically on the next visit
+- **Save/Open `.lzs` projects**: a versioned JSON file with the dataset, settings and parameters; invalid, corrupted or newer-version files are rejected with a readable message
+- Rendered results are not part of the project file (they are React nodes): loading a project clears the output console so old tables can never be mistaken for the restored data — rerun the analyses
+
 ### Statistical Analyses
 
 | Analysis | Parametric | Non-Parametric |
@@ -119,7 +124,8 @@ lazstatjs/
     │                       #   wizard, report)
     ├── analyses/           # Parameter panels + charts for the newer analyses
     ├── io/                 # Smart IO (detect/readers/writers, import wizard, export dialog),
-    │                       #   table TSV copy, chart PNG export, printable HTML report
+    │                       #   table TSV copy, chart PNG export, printable HTML report,
+    │                       #   .lzs project schema + autosave storage
     ├── components/         # Reusable ResultTable and AnalysisReport renderers
     └── index.css           # Tailwind styles + dark theme
 ```
@@ -150,6 +156,7 @@ lazstatjs/
 - `recharts` and `express` appear in dependencies but are not currently used
 - `@google/genai` SDK is installed for potential future AI integration
 - CI level (90/95/99%) is selectable in the analysis toolbar and applies to every table.
+- Projects (`.lzs`) and the silent autosave cover data, settings and analysis parameters. The output console is intentionally excluded: results are recomputed by running the analysis again on the restored grid.
 - The newer analyses follow the same contract as the original ones: a pure builder returning typed `TableSpec` objects, a written report generated from those tables, and reference tests (`node:test`) for the numerical results.
 - Known limitations are stated inside each report: sequential SS for unbalanced factorial designs, asymptotic KS p-values for fitted distributions, Wald tests and separation warnings for logistic regression, additive-only seasonal decomposition, conditional (CSS) ARIMA estimation with a bounded order search, Breslow ties and asymptotic proportional-hazards checks for Cox, screening-only assumptions in the Wizard.
 - The Cox model uses a time-interaction likelihood-ratio test for proportional hazards; the baseline cumulative hazard is the Breslow estimator and the concordance index is Harrell's C.
