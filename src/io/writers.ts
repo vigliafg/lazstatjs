@@ -2,7 +2,7 @@ import { escapeField, toCsv, trimEmptyRows } from '../csv';
 import type { GridData } from '../grid/types';
 import type { Delimiter } from './detect';
 
-export type ExportFormat = 'csv' | 'tsv' | 'pipe' | 'json' | 'spss';
+export type ExportFormat = 'csv' | 'tsv' | 'pipe' | 'json' | 'spss' | 'xlsx';
 
 export interface ExportOptions {
   format: ExportFormat;
@@ -126,4 +126,21 @@ export const downloadBlob = (blob: Blob, fileName: string): void => {
 
 export const downloadText = (content: string, fileName: string, mime: string): void => {
   downloadBlob(new Blob([content], { type: mime }), fileName);
+};
+
+export const downloadBytes = (bytes: Uint8Array, fileName: string, mime: string): void => {
+  // Copy into a fresh ArrayBuffer so the Blob never aliases a larger buffer.
+  const copy = new Uint8Array(bytes.length);
+  copy.set(bytes);
+  downloadBlob(new Blob([copy], { type: mime }), fileName);
+};
+
+/** A file produced by an export dialog: text formats or binary workbooks. */
+export type ExportFile =
+  | { content: string; fileName: string; mime: string; bytes?: undefined }
+  | { bytes: Uint8Array; fileName: string; mime: string; content?: undefined };
+
+export const downloadExportFile = (file: ExportFile): void => {
+  if (file.bytes) downloadBytes(file.bytes, file.fileName, file.mime);
+  else downloadText(file.content ?? '', file.fileName, file.mime);
 };

@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
-import { detectFormat, looksLikeJson, type Delimiter, type Detection } from './detect';
+import { detectFormat, detectHeader, looksLikeJson, type Delimiter, type Detection } from './detect';
 import { readDelimitedTable, readJsonTable, type ImportTable } from './readers';
 import { COL_TYPES, type ColType } from '../grid/types';
 import { loadPrefs, savePrefs } from './prefs';
+import { xlsxSheetToTable, type XlsxSheet } from './xlsx';
 
 export type ImportMode = 'overwrite' | 'append-rows' | 'append-cols';
 
 interface Props {
   fileName: string;
-  text: string;
+  /** Delimited/JSON payload; omitted when the file was an Excel workbook. */
+  text?: string;
+  /** Worksheets parsed from an .xlsx/.xls file (same pipeline as CSV). */
+  sheets?: XlsxSheet[];
   gridCols: string[];
   onApply: (table: ImportTable, mode: ImportMode) => void;
   onClose: () => void;
@@ -22,37 +26,73 @@ const DELIMS: { id: string; label: string; char: Delimiter }[] = [
   { id: '|', label: 'Pipe (|)', char: '|' },
 ];
 
-export function ImportWizard({ fileName, text, gridCols, onApply, onClose }: Props) {
-  const detection: Detection = useMemo(() => detectFormat(fileName, text), [fileName, text]);
-  const isJson = useMemo(() => looksLikeJson(text) || fileName.toLowerCase().endsWith('.json'), [text, fileName]);
+export function ImportWizard({ fileName, text = '', sheets, gridCols, onApply, onClose }: Props) {
+  const isWorkbook = (sheets?.length ?? 0) > 0;
   const prefs = useMemo(() => loadPrefs(), []);
+  const [sheetIndex, setSheetIndex] = useState(0);
+  const sheet = isWorkbook ? sheets?.[Math.min(sheetIndex, (sheets?.length ?? 1) - 1)] : undefined;
+
+  const detection: Detection = useMemo(() => {
+    if (sheet) {
+      const header = detectHeader(sheet.rows.slice(0, 10));
+      return {
+        delimiter: ',',
+        delimiterScores: { ',': 0, ';': 0, '\t': 0, '|': 0 },
+        hasHeader: header.hasHeader,
+        headerConfidence: header.confidence,
+        hadBOM: false,
+        decimalComma: false,
+        previewRows: Math.min(sheet.rows.length, 10),
+      };
+    }
+    return detectFormat(fileName, text);
+  }, [sheet, fileName, text]);
+  const isJson = useMemo(
+    () => !isWorkbook && (looksLikeJson(text) || fileName.toLowerCase().endsWith('.json')),
+    [isWorkbook, text, fileName]
+  );
   const [delimId, setDelimId] = useState<string>(() =>
     prefs.delimiter === '\t' ? 'tab' : ['auto', ',', ';', 'tab', '|'].includes(prefs.delimiter) ? prefs.delimiter : 'auto'
   );
-  const [hasHeader, setHasHeader] = useState<boolean>(prefs.hasHeader);
+  const [hasHeader, setHasHeader] = useState<boolean>(isWorkbook ? true : prefs.hasHeader);
   const [decimalComma, setDecimalComma] = useState<boolean>(detection.decimalComma);
   const [mode, setMode] = useState<ImportMode>('overwrite');
   const [overrides, setOverrides] = useState<Record<number, ColType>>({});
 
-  // Re-sync header/decimal defaults only when a *different* file arrives
-  // while the wizard is open; at first open the persisted prefs win.
-  const firstFile = useMemo(() => `${fileName}\0${text.length}`, []);
+  // Re-sync header/decimal defaults only when a *different* file or sheet
+  // arrives while the wizard is open; at first open the persisted prefs win.
+  const firstFile = useMemo(
+    () => `${fileName}\0${text.length}\0${sheets?.map((item) => item.name).join('|') ?? ''}`,
+    []
+  );
   useEffect(() => {
-    if (`${fileName}\0${text.length}` === firstFile) return;
+    if (`${fileName}\0${text.length}\0${sheets?.map((item) => item.name).join('|') ?? ''}` === firstFile) return;
     setDecimalComma(detection.decimalComma);
     setHasHeader(detection.hasHeader);
-  }, [fileName, text, detection, firstFile]);
+  }, [fileName, text, sheets, detection, firstFile]);
+
+  // A sheet switch changes the columns, so per-column type overrides must not
+  // leak from the previous sheet.
+  const switchSheet = (index: number) => {
+    setSheetIndex(index);
+    setOverrides({});
+    const next = sheets?.[index];
+    if (next) setHasHeader(detectHeader(next.rows.slice(0, 10)).hasHeader);
+  };
 
   const effDelim: Delimiter = delimId === 'auto' ? detection.delimiter : (DELIMS.find((d) => d.id === delimId)?.char ?? detection.delimiter);
 
   const parsed: { table: ImportTable | null; error: string | null } = useMemo(() => {
     try {
+      if (sheet) {
+        return { table: xlsxSheetToTable(sheet, { hasHeader, decimalComma, typeOverrides: overrides }), error: null };
+      }
       if (isJson) return { table: readJsonTable(text, { decimalComma, typeOverrides: overrides }), error: null };
       return { table: readDelimitedTable(text, { delimiter: effDelim, hasHeader, decimalComma, typeOverrides: overrides }), error: null };
     } catch (e) {
       return { table: null, error: e instanceof Error ? e.message : 'Cannot parse file' };
     }
-  }, [isJson, text, effDelim, hasHeader, decimalComma, overrides]);
+  }, [sheet, isJson, text, effDelim, hasHeader, decimalComma, overrides]);
   const { table, error } = parsed;
 
   const preview = table ? table.rows.slice(0, 10) : [];
@@ -63,13 +103,32 @@ export function ImportWizard({ fileName, text, gridCols, onApply, onClose }: Pro
         <div className="px-4 py-3 border-b border-border flex items-center justify-between">
           <div>
             <h2 className="text-accent2 font-mono text-[12px] font-bold uppercase tracking-widest">Smart Import</h2>
-            <p className="text-[11px] text-text3 font-mono truncate max-w-[500px]">{fileName}</p>
+            <p className="text-[11px] text-text3 font-mono truncate max-w-[500px]">
+              {fileName}
+              {isWorkbook && <span> · {sheets?.length} sheet{sheets && sheets.length > 1 ? 's' : ''}</span>}
+            </p>
           </div>
           <button className="tb-btn" onClick={onClose}>Close</button>
         </div>
 
         <div className="px-4 py-3 border-b border-border flex flex-wrap gap-4 items-end text-[11px]">
-          {!isJson && (
+          {isWorkbook && (
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] text-text3 font-mono uppercase">Worksheet</span>
+              <select
+                className="bg-surface3 border border-border2 rounded px-2 py-1 text-text"
+                value={sheetIndex}
+                onChange={(e) => switchSheet(parseInt(e.target.value, 10))}
+              >
+                {sheets?.map((item, index) => (
+                  <option key={`${item.name}-${index}`} value={index}>
+                    {item.name} ({item.rows.length} rows)
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {!isJson && !isWorkbook && (
             <>
               <label className="flex flex-col gap-1">
                 <span className="text-[10px] text-text3 font-mono uppercase">Delimiter {delimId === 'auto' && <span className="text-accent">(detected: {detection.delimiter === '\t' ? 'TAB' : detection.delimiter})</span>}</span>
@@ -87,6 +146,15 @@ export function ImportWizard({ fileName, text, gridCols, onApply, onClose }: Pro
                 </select>
               </label>
             </>
+          )}
+          {isWorkbook && (
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] text-text3 font-mono uppercase">Header</span>
+              <select className="bg-surface3 border border-border2 rounded px-2 py-1 text-text" value={hasHeader ? 'yes' : 'no'} onChange={(e) => setHasHeader(e.target.value === 'yes')}>
+                <option value="yes">First row is header</option>
+                <option value="no">No header</option>
+              </select>
+            </label>
           )}
           <label className="flex flex-col gap-1">
             <span className="text-[10px] text-text3 font-mono uppercase">Decimals</span>
@@ -110,6 +178,7 @@ export function ImportWizard({ fileName, text, gridCols, onApply, onClose }: Pro
         ) : table ? (
           <>
             <div className="px-4 py-2 text-[10px] font-mono text-text3 border-b border-border">
+              {sheet && <span className="text-accent2">{sheet.name} · </span>}
               {table.rows.length} rows x {table.names.length} cols
               {table.skippedEmpty > 0 && <span> · {table.skippedEmpty} empty skipped</span>}
               {table.renamedDupes > 0 && <span> · {table.renamedDupes} dup headers renamed</span>}

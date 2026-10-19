@@ -26,7 +26,7 @@ export const normalizePrefs = (parsed: Partial<IoPreferences>): IoPreferences =>
   // Corrupted or hand-edited values must never reach the IO pipeline.
   if (!['auto', ',', ';', 'tab', '\t', '|'].includes(merged.delimiter)) merged.delimiter = DEFAULT_PREFS.delimiter;
   if (merged.decimalSeparator !== '.' && merged.decimalSeparator !== ',') merged.decimalSeparator = DEFAULT_PREFS.decimalSeparator;
-  if (!['csv', 'tsv', 'pipe', 'json', 'spss'].includes(merged.exportFormat)) merged.exportFormat = DEFAULT_PREFS.exportFormat;
+  if (!['csv', 'tsv', 'pipe', 'json', 'spss', 'xlsx'].includes(merged.exportFormat)) merged.exportFormat = DEFAULT_PREFS.exportFormat;
   merged.hasHeader = merged.hasHeader !== false;
   merged.includeHeader = merged.includeHeader !== false;
   merged.dropEmptyRows = merged.dropEmptyRows !== false;

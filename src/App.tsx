@@ -110,7 +110,13 @@ import { ExportDialog } from './io/ExportDialog';
 import type { ImportTable } from './io/readers';
 import { looksLikeJson } from './io/detect';
 import { readDelimitedTable, readJsonTable } from './io/readers';
-import { downloadText } from './io/writers';
+import { downloadBytes, downloadExportFile, downloadText } from './io/writers';
+import {
+  buildResultsWorkbookFromElement,
+  readXlsxSheets,
+  XLSX_MIME,
+  type XlsxSheet,
+} from './io/xlsx';
 import { loadPrefs, savePrefs } from './io/prefs';
 import {
   DEFAULT_PARAMS,
@@ -312,7 +318,11 @@ export default function App() {
   };
 
   const csvInputRef = useRef<HTMLInputElement>(null);
-  const [pendingImport, setPendingImport] = useState<{ fileName: string; text: string } | null>(null);
+  const [pendingImport, setPendingImport] = useState<{
+    fileName: string;
+    text?: string;
+    sheets?: XlsxSheet[];
+  } | null>(null);
   const [showExport, setShowExport] = useState(false);
   const [ioPrefs, setIoPrefs] = useState(() => boot?.prefs ?? loadPrefs());
 
@@ -389,6 +399,15 @@ export default function App() {
 
   const importCsv = async (file: File) => {
     try {
+      const lower = file.name.toLowerCase();
+      // Excel workbooks are binary: parse every sheet, then reuse the wizard
+      // and the CSV type-inference pipeline on the chosen sheet.
+      if (lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.xlsm')) {
+        if (file.size > 25_000_000) throw new Error('The workbook is too large (max 25 MB)');
+        const sheets = readXlsxSheets(await file.arrayBuffer());
+        setPendingImport({ fileName: file.name, sheets });
+        return;
+      }
       const text = await file.text();
       if (!text.trim()) {
         showToast('Import', 'The file is empty', 'warn');
@@ -2396,6 +2415,18 @@ export default function App() {
     }
   };
 
+  const exportResultsXlsx = () => {
+    const el = document.getElementById('output-content');
+    if (!el) return;
+    try {
+      const bytes = buildResultsWorkbookFromElement(el, grid);
+      downloadBytes(bytes, 'lazstats-risultati.xlsx', XLSX_MIME);
+      showToast('Export', 'Workbook .xlsx con il dataset e le tabelle dei risultati', 'ok');
+    } catch (error) {
+      showToast('Export', error instanceof Error ? error.message : 'Could not build the workbook', 'error');
+    }
+  };
+
   const exportReportHtml = () => {
     const el = document.getElementById('output-content');
     if (!el) return;
@@ -2488,7 +2519,7 @@ export default function App() {
               <input
                 ref={csvInputRef}
                 type="file"
-                accept=".csv,.tsv,.tab,.txt,.json,.psv,text/csv,text/plain,application/json"
+                accept=".csv,.tsv,.tab,.txt,.json,.psv,.xlsx,.xls,.xlsm,text/csv,text/plain,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                 className="hidden"
                 onChange={(event) => {
                   const file = event.target.files?.[0];
@@ -3346,6 +3377,14 @@ export default function App() {
                 >
                   Report HTML
                 </button>
+                <button
+                  className="tb-btn"
+                  onClick={exportResultsXlsx}
+                  disabled={outputs.length === 0}
+                  title="Download an Excel workbook with the dataset and every result table"
+                >
+                  Results XLSX
+                </button>
               </div>
             </div>
 
@@ -3488,6 +3527,7 @@ export default function App() {
                       <option value="pipe">Pipe TXT</option>
                       <option value="json">JSON</option>
                       <option value="spss">SPSS (CSV + .sps)</option>
+                      <option value="xlsx">Excel (.xlsx)</option>
                     </select>
                   </div>
                 </div>
@@ -3517,6 +3557,7 @@ export default function App() {
         <ImportWizard
           fileName={pendingImport.fileName}
           text={pendingImport.text}
+          sheets={pendingImport.sheets}
           gridCols={grid.cols.map((c) => c.name)}
           onClose={() => setPendingImport(null)}
           onApply={applyImportTable}
@@ -3527,7 +3568,7 @@ export default function App() {
           grid={grid}
           onClose={() => setShowExport(false)}
           onExport={(files) => {
-            files.forEach((f) => downloadText(f.content, f.fileName, f.mime));
+            files.forEach((f) => downloadExportFile(f));
             setShowExport(false);
             showToast('Export', files.map((f) => f.fileName).join(' + '), 'ok');
           }}
