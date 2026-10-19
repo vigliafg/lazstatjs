@@ -1,5 +1,5 @@
-import type { Column, ColType, GridData } from './types';
-import { emptyRow, uniqueColName, validateValue } from './types';
+import type { CategoryLevel, Column, ColType, GridData } from './types';
+import { MAX_LEVELS, distinctColumnValues, emptyRow, uniqueColName, validateValue } from './types';
 
 /* ---------- Structural operations (pure, return new GridData) ---------- */
 
@@ -21,6 +21,137 @@ export const setColType = (grid: GridData, c: number, type: ColType): GridData =
   cols: grid.cols.map((col, i) => (i === c ? { ...col, type } : col)),
   rows: grid.rows,
 });
+
+/* ---------- Categorical levels ---------- */
+
+/**
+ * Store the levels declared for a categorical column. Codes and labels are
+ * trimmed, deduplicated (labels case-insensitively with a numeric suffix) and
+ * capped; a reference level that no longer exists is dropped. Cell values are
+ * never rewritten: existing data outside the list stays visible as "not in
+ * the list".
+ */
+export const setColumnLevels = (
+  grid: GridData,
+  c: number,
+  levels: CategoryLevel[],
+  reference?: string
+): GridData => {
+  if (c < 0 || c >= grid.cols.length) return grid;
+  const values = new Set<string>();
+  const labels = new Set<string>();
+  const clean: CategoryLevel[] = [];
+  for (const level of levels) {
+    if (clean.length >= MAX_LEVELS) break;
+    const value = String(level?.value ?? '').trim();
+    if (value === '' || values.has(value)) continue;
+    const base = String(level?.label ?? '').trim() || value;
+    let label = base;
+    let suffix = 2;
+    while (labels.has(label.toLowerCase())) {
+      label = `${base} ${suffix}`;
+      suffix += 1;
+    }
+    values.add(value);
+    labels.add(label.toLowerCase());
+    clean.push({ value, label });
+  }
+  const ref = reference && values.has(reference) ? reference : undefined;
+  return {
+    cols: grid.cols.map((col, i) =>
+      i === c ? { ...col, levels: clean.length > 0 ? clean : undefined, reference: ref } : col
+    ),
+    rows: grid.rows,
+  };
+};
+
+export interface RecodeLevelsResult {
+  grid: GridData;
+  /** Cells whose value actually changed. */
+  changed: number;
+  /** Cells emptied by mapping a code to "". */
+  cleared: number;
+  /** Groups that disappeared because two or more codes now share a target. */
+  merged: number;
+  /** Set when the new codes no longer satisfy the declared column type. */
+  typeChangedTo?: ColType;
+}
+
+/**
+ * Recode the group codes of one column: rename, merge (two codes mapped to the
+ * same target) or clear (mapped to "") in a single pass. Every cell is matched
+ * against its *original* value, so swaps like 1→2 and 2→1 behave as expected.
+ * Declared levels follow the mapping, keeping their labels; a merged level
+ * keeps the label of the first code that reaches the target. The reference
+ * level follows its own code and is dropped when that code disappears. When
+ * the new codes no longer fit the column type (for example text codes in an
+ * `int` column) the type becomes `cat`, so validation stays honest.
+ */
+export const recodeColumnValues = (
+  grid: GridData,
+  c: number,
+  mapping: Record<string, string>
+): RecodeLevelsResult => {
+  if (c < 0 || c >= grid.cols.length) return { grid, changed: 0, cleared: 0, merged: 0 };
+  const map = new Map<string, string>();
+  Object.entries(mapping ?? {}).forEach(([from, to]) => {
+    const key = String(from ?? '').trim();
+    if (key === '') return;
+    map.set(key, String(to ?? '').trim());
+  });
+  if (map.size === 0) return { grid, changed: 0, cleared: 0, merged: 0 };
+
+  let changed = 0;
+  let cleared = 0;
+  const rows = grid.rows.map((row) => {
+    const raw = String(row[c] ?? '').trim();
+    if (!map.has(raw)) return [...row];
+    const next = map.get(raw) as string;
+    if (next === raw) return [...row];
+    changed += 1;
+    if (next === '') cleared += 1;
+    const copy = [...row];
+    copy[c] = next;
+    return copy;
+  });
+
+  const col = grid.cols[c];
+  const levels = (col.levels ?? []).flatMap((level) => {
+    if (!map.has(level.value)) return [{ ...level }];
+    const next = map.get(level.value) as string;
+    return next === '' ? [] : [{ value: next, label: level.label }];
+  });
+  const ref = col.reference && map.has(col.reference) ? map.get(col.reference) : col.reference;
+
+  let next = setColumnLevels({ cols: grid.cols, rows }, c, levels, ref || undefined);
+  // Groups that disappear minus the ones removed by clearing: a code emptied
+  // by "clear" is not a merge, while 21 → 20 fuses into the existing group 20.
+  const before = distinctColumnValues(grid.rows, c);
+  const after = distinctColumnValues(rows, c);
+  const clearedGroups = before.filter((value) => map.get(value) === '').length;
+  const merged = Math.max(0, before.length - after.length - clearedGroups);
+  let typeChangedTo: ColType | undefined;
+  if (next.cols[c].type !== 'cat' && rows.some((row) => !validateValue(row[c] ?? '', next.cols[c].type))) {
+    typeChangedTo = 'cat';
+    next = setColType(next, c, 'cat');
+  }
+  return { grid: next, changed, cleared, merged, typeChangedTo };
+};
+
+/** Merge the declared levels with every value present in the column. */
+export const levelsFromColumnValues = (grid: GridData, c: number): CategoryLevel[] => {
+  if (c < 0 || c >= grid.cols.length) return [];
+  const col = grid.cols[c];
+  const merged: CategoryLevel[] = (col.levels ?? []).map((level) => ({ ...level }));
+  const known = new Set(merged.map((level) => level.value));
+  distinctColumnValues(grid.rows, c).forEach((value) => {
+    if (!known.has(value)) {
+      known.add(value);
+      merged.push({ value, label: value });
+    }
+  });
+  return merged;
+};
 
 export const addColumnEnd = (grid: GridData): GridData => {
   const name = uniqueColName(grid.cols, `Var${grid.cols.length + 1}`);

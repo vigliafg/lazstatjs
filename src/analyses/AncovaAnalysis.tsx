@@ -10,6 +10,16 @@ import {
 import { ancovaReport, ancovaTables } from '../stats/ancova';
 import { ResultTables } from '../components/ResultTable';
 import { parseNum } from '../stats/core';
+import {
+  analysisRows,
+  groupColumnIndexes,
+  levelLabel,
+  orderedColumnLevels,
+  referenceFirst,
+  type CategoryLevel,
+  type GridData,
+} from '../grid/types';
+import { LevelsEditor, LEVELS_BUTTON_CLASS } from '../grid/LevelsEditor';
 import type { ReportSpec } from '../stats/report';
 
 export interface AncovaHandle {
@@ -17,7 +27,9 @@ export interface AncovaHandle {
 }
 
 interface Props {
-  grid: { cols: { name: string; type: string }[]; rows: string[][] };
+  grid: GridData;
+  onLevels: (column: number, levels: CategoryLevel[], reference?: string) => void;
+  onRecode: (column: number, mapping: Record<string, string>) => void;
   ciLevel: number;
   onOutput: (node: React.ReactNode, report: ReportSpec | null) => void;
   onError: (message: string) => void;
@@ -46,9 +58,7 @@ const distinctValues = (grid: Props['grid'], index: number): Set<string> =>
 
 const defaultSelection = (grid: Props['grid']) => {
   const distinct = grid.cols.map((_, index) => distinctValues(grid, index).size);
-  const factorCandidates = grid.cols
-    .map((_, index) => index)
-    .filter((index) => distinct[index] >= 2 && distinct[index] <= 8);
+  const factorCandidates = groupColumnIndexes(grid);
   // Prefer a genuine categorical column, then fall back to a numeric code.
   const factor =
     factorCandidates.find((index) => !isNumericColumn(grid, index)) ??
@@ -70,7 +80,7 @@ const defaultSelection = (grid: Props['grid']) => {
 };
 
 export const AncovaAnalysis = forwardRef<AncovaHandle, Props>(
-  ({ grid, ciLevel, onOutput, onError }, ref) => {
+  ({ grid, onLevels, onRecode, ciLevel, onOutput, onError }, ref) => {
     const [defaults] = useState(() => defaultSelection(grid));
     const [response, setResponse] = useState(defaults.response);
     const [factor, setFactor] = useState(defaults.factor);
@@ -79,12 +89,7 @@ export const AncovaAnalysis = forwardRef<AncovaHandle, Props>(
     const numericColumns = grid.cols
       .map((_, index) => index)
       .filter((index) => isNumericColumn(grid, index));
-    const factorColumns = grid.cols
-      .map((_, index) => index)
-      .filter((index) => {
-        const count = distinctValues(grid, index).size;
-        return count >= 2 && count <= 12;
-      });
+    const factorColumns = groupColumnIndexes(grid);
 
     const toggleCovariate = (index: number) => {
       setCovariates((prev) =>
@@ -106,7 +111,7 @@ export const AncovaAnalysis = forwardRef<AncovaHandle, Props>(
       const y: number[] = [];
       const levels: string[] = [];
       const covariateValues: number[][] = chosen.map(() => []);
-      grid.rows.forEach((row) => {
+      analysisRows(grid, [factor]).forEach((row) => {
         const value = parseNum(row[response]);
         const level = String(row[factor] ?? '').trim();
         if (!Number.isFinite(value) || level === '') return;
@@ -130,6 +135,11 @@ export const AncovaAnalysis = forwardRef<AncovaHandle, Props>(
       const responseName = grid.cols[response]?.name ?? 'Y';
       const factorName = grid.cols[factor]?.name ?? 'Fattore';
       const covariateNames = chosen.map((index) => grid.cols[index]?.name ?? `Cov${index + 1}`);
+      const factorCol = grid.cols[factor];
+      const declaredLevels = orderedColumnLevels(factorCol, grid.rows, factor).map((level) =>
+        levelLabel(factorCol, level.value)
+      );
+      const referenceLabel = factorCol?.reference ? levelLabel(factorCol, factorCol.reference) : undefined;
       const options = {
         response: y,
         factor: levels,
@@ -137,6 +147,7 @@ export const AncovaAnalysis = forwardRef<AncovaHandle, Props>(
         responseName,
         factorName,
         covariateNames,
+        levels: referenceFirst(declaredLevels, referenceLabel),
         level: ciLevel,
       };
 
@@ -246,17 +257,27 @@ export const AncovaAnalysis = forwardRef<AncovaHandle, Props>(
           <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">
             Factor
           </label>
-          <select
-            className="bg-surface3 border border-border2 text-text text-[11px] p-1.5 rounded min-w-[120px]"
-            value={factor}
-            onChange={(event) => setFactor(parseInt(event.target.value, 10))}
-          >
-            {factorColumns.map((index) => (
-              <option key={index} value={index}>
-                {grid.cols[index]?.name}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-1">
+            <select
+              className="bg-surface3 border border-border2 text-text text-[11px] p-1.5 rounded min-w-[120px]"
+              value={factor}
+              onChange={(event) => setFactor(parseInt(event.target.value, 10))}
+            >
+              {factorColumns.map((index) => (
+                <option key={index} value={index}>
+                  {grid.cols[index]?.name}
+                </option>
+              ))}
+            </select>
+            <LevelsEditor
+              grid={grid}
+              column={factor}
+              onLevels={onLevels}
+              onRecode={onRecode}
+              label="Modifica livelli"
+              className={LEVELS_BUTTON_CLASS}
+            />
+          </div>
         </div>
 
         <div className="flex flex-col gap-1">

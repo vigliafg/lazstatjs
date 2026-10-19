@@ -1,16 +1,22 @@
 /**
  * LazStats project files (.lzs) and silent autosave.
  *
- * A snapshot contains the data grid, the IO preferences and the analysis
- * settings/parameters. Rendered results are not serialisable React nodes, so
- * the output console is intentionally not part of the file: after loading a
- * project the user re-runs the analyses against the restored grid.
+ * A snapshot contains the data grid, the IO preferences, the analysis
+ * settings/parameters and static snapshots of the output console. Rendered
+ * results are React nodes, so the console stores the HTML produced for each
+ * run (tables, charts and report) in `src/io/outputs.ts`.
  */
 
-import type { ColType, GridData } from '../grid/types';
-import { COL_TYPES } from '../grid/types';
+import type { CategoryLevel, ColType, GridData } from '../grid/types';
+import { COL_TYPES, MAX_LEVELS } from '../grid/types';
 import { MAX_COLS, MAX_ROWS } from './readers';
 import { normalizePrefs, type IoPreferences } from './prefs';
+import {
+  MAX_SINGLE_OUTPUT_CHARS,
+  capStoredOutputs,
+  parseStoredOutputs,
+  type StoredOutput,
+} from './outputs';
 
 export const PROJECT_APP = 'lazstats';
 export const PROJECT_VERSION = 1;
@@ -18,7 +24,7 @@ export const PROJECT_STORAGE_KEY = 'lazstats.project.v1';
 /** Keep autosave comfortably below the ~5 MB localStorage budget. */
 export const MAX_AUTOSAVE_CHARS = 4_000_000;
 
-export type ProjectTab = 'data' | 'analysis' | 'settings';
+export type ProjectTab = 'data' | 'analysis' | 'settings' | 'help';
 
 export interface TTestParams {
   type: 'ind' | 'dep' | 'one';
@@ -86,6 +92,8 @@ export interface ProjectSnapshot {
   prefs: IoPreferences;
   settings: ProjectSettings;
   params: ProjectParams;
+  /** Static snapshots of the output console, oldest first. */
+  outputs: StoredOutput[];
 }
 
 export interface ProjectInput {
@@ -93,6 +101,7 @@ export interface ProjectInput {
   prefs: IoPreferences;
   settings: ProjectSettings;
   params: ProjectParams;
+  outputs?: StoredOutput[];
 }
 
 export const DEFAULT_PARAMS: ProjectParams = {
@@ -163,6 +172,31 @@ const parseCell = (value: unknown): string => {
   return '';
 };
 
+/** Declared categorical levels from an untrusted project file. */
+const parseLevels = (value: unknown): CategoryLevel[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const values = new Set<string>();
+  const labels = new Set<string>();
+  const out: CategoryLevel[] = [];
+  for (const raw of value) {
+    if (out.length >= MAX_LEVELS) break;
+    if (!isRecord(raw)) continue;
+    const code = typeof raw.value === 'string' || typeof raw.value === 'number' ? String(raw.value).trim() : '';
+    if (code === '' || values.has(code)) continue;
+    const base = typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : code;
+    let label = base;
+    let suffix = 2;
+    while (labels.has(label.toLowerCase())) {
+      label = `${base} ${suffix}`;
+      suffix += 1;
+    }
+    values.add(code);
+    labels.add(label.toLowerCase());
+    out.push({ value: code, label });
+  }
+  return out.length > 0 ? out : undefined;
+};
+
 export const parseGrid = (value: unknown): GridData => {
   if (!isRecord(value)) throw new Error('The project has no data grid');
   const colsRaw = value.cols;
@@ -183,7 +217,17 @@ export const parseGrid = (value: unknown): GridData => {
       n += 1;
     }
     taken.add(name.toLowerCase());
-    return { name, type: parseType(record.type) };
+    const levels = parseLevels(record.levels);
+    const reference =
+      levels && typeof record.reference === 'string' && levels.some((level) => level.value === record.reference)
+        ? record.reference
+        : undefined;
+    return {
+      name,
+      type: parseType(record.type),
+      ...(levels ? { levels } : {}),
+      ...(reference ? { reference } : {}),
+    };
   });
 
   const width = cols.length;
@@ -257,7 +301,7 @@ const parseSettings = (value: unknown): ProjectSettings => {
     ciLevel: ci === 90 || ci === 95 || ci === 99 ? ci : DEFAULT_SETTINGS.ciLevel,
     activeAnalysis: text(raw.activeAnalysis, DEFAULT_SETTINGS.activeAnalysis),
     activeTab:
-      activeTab === 'analysis' || activeTab === 'settings' || activeTab === 'data'
+      activeTab === 'analysis' || activeTab === 'settings' || activeTab === 'data' || activeTab === 'help'
         ? activeTab
         : DEFAULT_SETTINGS.activeTab,
   };
@@ -268,12 +312,25 @@ export const createProjectSnapshot = (input: ProjectInput, savedAt = new Date().
   version: PROJECT_VERSION,
   savedAt,
   grid: {
-    cols: input.grid.cols.map((col) => ({ ...col })),
+    cols: input.grid.cols.map((col) => ({
+      ...col,
+      levels: col.levels?.map((level) => ({ ...level })),
+    })),
     rows: input.grid.rows.map((row) => [...row]),
   },
   prefs: { ...input.prefs },
   settings: { ...input.settings },
   params: parseParams(input.params, input.grid.cols.length),
+  outputs: capStoredOutputs(
+    (input.outputs ?? [])
+      .filter((entry) => entry.html.length > 0 && entry.html.length <= MAX_SINGLE_OUTPUT_CHARS)
+      .map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        createdAt: entry.createdAt,
+        html: entry.html,
+      }))
+  ),
 });
 
 export const serializeProject = (snapshot: ProjectSnapshot): string => JSON.stringify(snapshot, null, 2);
@@ -308,6 +365,7 @@ export const parseProject = (text: string): ProjectSnapshot => {
     prefs: normalizePrefs(isRecord(raw.prefs) ? (raw.prefs as Partial<IoPreferences>) : {}),
     settings: parseSettings(raw.settings),
     params: parseParams(raw.params, grid.cols.length),
+    outputs: parseStoredOutputs(raw.outputs),
   };
 };
 

@@ -9,13 +9,17 @@ import {
   type WizardGoal,
 } from '../stats/wizard';
 import type { ReportSpec } from '../stats/report';
+import { analysisRows, groupColumnIndexes, type CategoryLevel, type GridData } from '../grid/types';
+import { LevelsEditor, LEVELS_BUTTON_CLASS } from '../grid/LevelsEditor';
 
 export interface WizardHandle {
   run: () => void;
 }
 
 interface Props {
-  grid: { cols: { name: string }[]; rows: string[][] };
+  grid: GridData;
+  onLevels: (column: number, levels: CategoryLevel[], reference?: string) => void;
+  onRecode: (column: number, mapping: Record<string, string>) => void;
   ciLevel: number;
   onOutput: (node: React.ReactNode, report: ReportSpec | null) => void;
   onOpenAnalysis: (analysisId: string) => void;
@@ -34,8 +38,14 @@ const firstOfKind = (
 };
 
 export const WizardAnalysis = forwardRef<WizardHandle, Props>(
-  ({ grid, ciLevel, onOutput, onOpenAnalysis }, ref) => {
-    const profiles = useMemo(() => profileColumns(grid.cols, grid.rows), [grid]);
+  ({ grid, onLevels, onRecode, ciLevel, onOutput, onOpenAnalysis }, ref) => {
+    // Group columns are profiled on their labels: the recommendation text and
+    // every table then speak the user's language ("Controllo"), not the codes.
+    const analysisGrid = useMemo(
+      () => ({ ...grid, rows: analysisRows(grid, groupColumnIndexes(grid)) }),
+      [grid]
+    );
+    const profiles = useMemo(() => profileColumns(analysisGrid.cols, analysisGrid.rows), [analysisGrid]);
     const [goal, setGoal] = useState<WizardGoal>('compare');
     const [outcome, setOutcome] = useState(() => {
       const numeric = firstOfKind(profiles, 'numeric');
@@ -51,12 +61,12 @@ export const WizardAnalysis = forwardRef<WizardHandle, Props>(
     const analysis = useMemo(
       () =>
         runWizard({
-          columns: grid.cols,
-          rows: grid.rows,
+          columns: analysisGrid.cols,
+          rows: analysisGrid.rows,
           selection: { goal, outcome, group, second, paired },
           level: ciLevel,
         }),
-      [grid, goal, outcome, group, second, paired, ciLevel]
+      [analysisGrid, goal, outcome, group, second, paired, ciLevel]
     );
 
     const { recommendation } = analysis;
@@ -145,14 +155,24 @@ export const WizardAnalysis = forwardRef<WizardHandle, Props>(
               <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">
                 Gruppi {goal === 'survive' ? '(opzionale)' : ''}
               </label>
-              <select className={inputClass} value={group} onChange={e => setGroup(parseInt(e.target.value, 10))}>
-                <option value={-1}>— nessun gruppo —</option>
-                {grid.cols.map((column, index) => (
-                  <option key={index} value={index}>
-                    {column.name} ({profiles[index]?.unique ?? 0} livelli)
-                  </option>
-                ))}
-              </select>
+              <div className="flex items-center gap-1">
+                <select className={inputClass} value={group} onChange={e => setGroup(parseInt(e.target.value, 10))}>
+                  <option value={-1}>— nessun gruppo —</option>
+                  {groupColumnIndexes(grid).map((index) => (
+                    <option key={index} value={index}>
+                      {grid.cols[index]?.name} ({profiles[index]?.unique ?? 0} livelli)
+                    </option>
+                  ))}
+                </select>
+                <LevelsEditor
+                  grid={grid}
+                  column={group}
+                  onLevels={onLevels}
+                  onRecode={onRecode}
+                  label="Modifica livelli"
+                  className={LEVELS_BUTTON_CLASS}
+                />
+              </div>
             </div>
           )}
 

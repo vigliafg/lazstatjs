@@ -145,3 +145,12 @@
     @apply flex-1 overflow-auto p-4 font-mono text-[12px] leading-relaxed text-text2 bg-bg min-h-0 pb-32;
   }
 }
+
+/* Invalid grid cells. Kept outside @layer components so it beats the
+   Tailwind utilities: `bg-red/10 text-red` used to be overridden by
+   `bg-transparent text-text` (utilities are sorted by name, not by the class
+   attribute), which left invalid cells looking normal. */
+.cell-invalid {
+  background-color: rgba(248, 113, 113, 0.12);
+  color: var(--color-red);
+}

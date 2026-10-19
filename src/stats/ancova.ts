@@ -76,6 +76,8 @@ export interface AncovaOptions {
   factorName: string;
   covariateNames: string[];
   level: number;
+  /** Declared level order (labels), reference level first. */
+  levels?: string[];
 }
 
 interface AncovaCore {
@@ -122,7 +124,12 @@ const build = (options: AncovaOptions): AncovaCore | null => {
   if (m === 0 || response.length !== factor.length) return null;
   if (covariates.some((values) => values.length !== response.length)) return null;
 
-  const levels = Array.from(new Set(factor.filter((value) => value.trim() !== ''))).sort();
+  const observed = Array.from(new Set(factor.filter((value) => value.trim() !== '')));
+  const declared = options.levels ?? [];
+  const levels = [
+    ...declared.filter((value) => observed.includes(value)),
+    ...observed.filter((value) => !declared.includes(value)).sort(),
+  ];
   const k = levels.length;
   if (k < 2) return null;
 

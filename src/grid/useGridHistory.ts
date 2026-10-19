@@ -1,17 +1,32 @@
 import { useCallback, useRef, useState } from 'react';
-import type { GridData } from './types';
+import type { CategoryLevel, GridData } from './types';
 
 const CAP = 50;
 
 const clone = (g: GridData): GridData => ({
-  cols: g.cols.map((c) => ({ ...c })),
+  cols: g.cols.map((c) => ({ ...c, levels: c.levels?.map((level) => ({ ...level })) })),
   rows: g.rows.map((r) => [...r]),
 });
+
+const sameLevels = (a?: CategoryLevel[], b?: CategoryLevel[]): boolean => {
+  const left = a ?? [];
+  const right = b ?? [];
+  return (
+    left.length === right.length &&
+    left.every((level, i) => level.value === right[i]?.value && level.label === right[i]?.label)
+  );
+};
 
 const sameGrid = (a: GridData, b: GridData): boolean =>
   a.cols.length === b.cols.length &&
   a.rows.length === b.rows.length &&
-  a.cols.every((c, i) => c.name === b.cols[i]?.name && c.type === b.cols[i]?.type) &&
+  a.cols.every(
+    (c, i) =>
+      c.name === b.cols[i]?.name &&
+      c.type === b.cols[i]?.type &&
+      c.reference === b.cols[i]?.reference &&
+      sameLevels(c.levels, b.cols[i]?.levels)
+  ) &&
   a.rows.every((r, i) => {
     const other = b.rows[i] ?? [];
     // Ragged rows from legacy states: compare up to the widest row.

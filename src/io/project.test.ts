@@ -90,6 +90,72 @@ describe('project sanitisation', () => {
     assert.deepEqual(empty.rows, [['']]);
   });
 
+  it('preserves the extended column types in a project file', () => {
+    const parsed = parseGrid({
+      cols: [
+        { name: 'Quando', type: 'dtm' },
+        { name: 'Ora', type: 'tim' },
+        { name: 'Gruppo', type: 'cat' },
+        { name: 'Codice', type: 'id' },
+      ],
+      rows: [['2026-10-19 10:00', '09:30', 'A', 'ABC-1']],
+    });
+    assert.deepEqual(parsed.cols.map((c) => c.type), ['dtm', 'tim', 'cat', 'id']);
+  });
+
+  it('round-trips categorical levels and the reference level', () => {
+    const withLevels = createProjectSnapshot({
+      grid: {
+        cols: [
+          {
+            name: 'Gruppo',
+            type: 'cat',
+            levels: [
+              { value: '1', label: 'Controllo' },
+              { value: '2', label: 'Trattamento' },
+            ],
+            reference: '1',
+          },
+          { name: 'Score', type: 'num' },
+        ],
+        rows: [['1', '10'], ['2', '12']],
+      },
+      prefs: DEFAULT_PREFS,
+      settings: DEFAULT_SETTINGS,
+      params: DEFAULT_PARAMS,
+    });
+    const restored = parseProject(serializeProject(withLevels));
+    assert.deepEqual(restored.grid.cols[0].levels, [
+      { value: '1', label: 'Controllo' },
+      { value: '2', label: 'Trattamento' },
+    ]);
+    assert.equal(restored.grid.cols[0].reference, '1');
+  });
+
+  it('sanitises invalid levels and drops a reference outside the list', () => {
+    const parsed = parseGrid({
+      cols: [
+        {
+          name: 'G',
+          type: 'cat',
+          levels: [
+            { value: ' 1 ', label: 'A' },
+            { value: '1', label: 'B' },
+            { value: '', label: 'C' },
+            { value: '2', label: 'a' },
+          ],
+          reference: '9',
+        },
+      ],
+      rows: [['1']],
+    });
+    assert.deepEqual(parsed.cols[0].levels, [
+      { value: '1', label: 'A' },
+      { value: '2', label: 'a 2' },
+    ]);
+    assert.equal(parsed.cols[0].reference, undefined);
+  });
+
   it('falls back on invalid settings and params without losing valid ones', () => {
     const base = makeSnapshot();
     const parsed = parseProject(

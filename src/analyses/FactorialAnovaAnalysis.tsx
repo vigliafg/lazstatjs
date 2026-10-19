@@ -10,6 +10,8 @@ import {
 import { factorialCells, factorialReport, factorialTables } from '../stats/factorial';
 import { ResultTables } from '../components/ResultTable';
 import { parseNum } from '../stats/core';
+import { analysisRows, groupColumnIndexes, type CategoryLevel, type GridData } from '../grid/types';
+import { LevelsEditor, LEVELS_BUTTON_CLASS } from '../grid/LevelsEditor';
 import type { ReportSpec } from '../stats/report';
 
 export interface FactorialAnovaHandle {
@@ -17,7 +19,9 @@ export interface FactorialAnovaHandle {
 }
 
 interface Props {
-  grid: { cols: { name: string }[]; rows: string[][] };
+  grid: GridData;
+  onLevels: (column: number, levels: CategoryLevel[], reference?: string) => void;
+  onRecode: (column: number, mapping: Record<string, string>) => void;
   ciLevel: number;
   onOutput: (node: React.ReactNode, report: ReportSpec | null) => void;
   onError: (message: string) => void;
@@ -34,10 +38,7 @@ const defaultSelection = (grid: Props['grid']) => {
   const distinct = grid.cols.map((_, index) =>
     new Set(grid.rows.map(row => String(row[index] ?? '').trim()).filter(value => value !== '')).size
   );
-  const candidates = distinct
-    .map((count, index) => ({ index, count }))
-    .filter(item => item.count >= 2 && item.count <= 8)
-    .map(item => item.index);
+  const candidates = groupColumnIndexes(grid).filter((index) => distinct[index] >= 2 && distinct[index] <= 8);
 
   const complete = (a: number, b: number): boolean => {
     const seen = new Set<string>();
@@ -75,7 +76,7 @@ const defaultSelection = (grid: Props['grid']) => {
 };
 
 export const FactorialAnovaAnalysis = forwardRef<FactorialAnovaHandle, Props>(
-  ({ grid, ciLevel, onOutput, onError }, ref) => {
+  ({ grid, onLevels, onRecode, ciLevel, onOutput, onError }, ref) => {
     const [defaults] = useState(() => defaultSelection(grid));
     const [response, setResponse] = useState(defaults.response);
     const [factorA, setFactorA] = useState(defaults.factorA);
@@ -95,7 +96,7 @@ export const FactorialAnovaAnalysis = forwardRef<FactorialAnovaHandle, Props>(
       const responseValues: number[] = [];
       const labelsA: string[] = [];
       const labelsB: string[] = [];
-      grid.rows.forEach(row => {
+      analysisRows(grid, [factorA, factorB]).forEach(row => {
         const value = parseNum(row[response]);
         if (!Number.isFinite(value)) return;
         responseValues.push(value);
@@ -220,32 +221,52 @@ export const FactorialAnovaAnalysis = forwardRef<FactorialAnovaHandle, Props>(
 
         <div className="flex flex-col gap-1">
           <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">Factor A</label>
-          <select
-            className="bg-surface3 border border-border2 text-text text-[11px] p-1.5 rounded min-w-[120px]"
-            value={factorA}
-            onChange={e => setFactorA(parseInt(e.target.value, 10))}
-          >
-            {grid.cols.map((column, index) => (
-              <option key={index} value={index}>
-                {column.name}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-1">
+            <select
+              className="bg-surface3 border border-border2 text-text text-[11px] p-1.5 rounded min-w-[120px]"
+              value={factorA}
+              onChange={e => setFactorA(parseInt(e.target.value, 10))}
+            >
+              {groupColumnIndexes(grid).map((index) => (
+                <option key={index} value={index}>
+                  {grid.cols[index]?.name}
+                </option>
+              ))}
+            </select>
+            <LevelsEditor
+              grid={grid}
+              column={factorA}
+              onLevels={onLevels}
+              onRecode={onRecode}
+              label="Modifica livelli"
+              className={LEVELS_BUTTON_CLASS}
+            />
+          </div>
         </div>
 
         <div className="flex flex-col gap-1">
           <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">Factor B</label>
-          <select
-            className="bg-surface3 border border-border2 text-text text-[11px] p-1.5 rounded min-w-[120px]"
-            value={factorB}
-            onChange={e => setFactorB(parseInt(e.target.value, 10))}
-          >
-            {grid.cols.map((column, index) => (
-              <option key={index} value={index}>
-                {column.name}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-1">
+            <select
+              className="bg-surface3 border border-border2 text-text text-[11px] p-1.5 rounded min-w-[120px]"
+              value={factorB}
+              onChange={e => setFactorB(parseInt(e.target.value, 10))}
+            >
+              {groupColumnIndexes(grid).map((index) => (
+                <option key={index} value={index}>
+                  {grid.cols[index]?.name}
+                </option>
+              ))}
+            </select>
+            <LevelsEditor
+              grid={grid}
+              column={factorB}
+              onLevels={onLevels}
+              onRecode={onRecode}
+              label="Modifica livelli"
+              className={LEVELS_BUTTON_CLASS}
+            />
+          </div>
         </div>
 
         <div className="flex flex-col gap-1">

@@ -6,8 +6,9 @@ import {
   coerceGrid, coerceValue, findReplace, trimGrid, removeEmptyRows, removeDuplicateRows,
   fillMissing, findInvalid, sortByColumn, recodeColumn, splitColumn,
   mergeColumns, computeColumn, rowMatchesFilter, filterRowIndexes, rowMatches,
+  renameColumn, setColType,
 } from './ops';
-import type { GridData } from './types';
+import { COL_TYPES, validateValue, type ColType, type GridData } from './types';
 
 const demo = (): GridData => ({
   cols: [
@@ -229,5 +230,66 @@ describe('grid ops foundation', () => {
     };
     const out = clearRange(g, { r0: 0, c0: 0, r1: 5, c1: 5 });
     assert.deepEqual(out.rows[1], ['']);
+  });
+});
+
+describe('column names and types', () => {
+  it('renames, trims and keeps names unique', () => {
+    const g = renameColumn(demo(), 0, '  Score  ');
+    assert.equal(g.cols[0].name, 'Score');
+    assert.equal(g.cols[1].name, 'B');
+
+    const dupe = renameColumn(g, 1, 'score');
+    assert.equal(dupe.cols[1].name, 'score_2');
+
+    // Blank names are ignored instead of wiping the header.
+    assert.equal(renameColumn(g, 0, '   ').cols[0].name, 'Score');
+    // Out-of-range indexes are a no-op.
+    assert.equal(renameColumn(g, 9, 'X'), g);
+  });
+
+  it('keeps the rest of the grid untouched when renaming', () => {
+    const g = demo();
+    const out = renameColumn(g, 0, 'Score');
+    assert.deepEqual(out.rows, g.rows);
+    assert.equal(out.cols[1], g.cols[1]);
+  });
+
+  it('changes the type of one column only', () => {
+    const g = demo();
+    const out = setColType(g, 1, 'dat');
+    assert.equal(out.cols[0].type, 'num');
+    assert.equal(out.cols[1].type, 'dat');
+    assert.deepEqual(out.rows, g.rows);
+  });
+
+  it('offers every declared type in the dropdown', () => {
+    const ids = COL_TYPES.map((t) => t.id);
+    assert.deepEqual(ids, ['num', 'int', 'dec', 'cat', 'str', 'id', 'bol', 'dat', 'dtm', 'tim', 'alp', 'chr']);
+    assert.equal(new Set(ids).size, ids.length);
+    assert.ok(COL_TYPES.every((t) => t.full.trim().length > 0));
+  });
+
+  it('validates the new date-time, time, categorical and identifier types', () => {
+    const valid: [string, ColType][] = [
+      ['2026-10-19 14:30', 'dtm'],
+      ['2026-10-19T14:30:59', 'dtm'],
+      ['14:30', 'tim'],
+      ['09:05:07', 'tim'],
+      ['Gruppo A', 'cat'],
+      ['ABC-123', 'id'],
+    ];
+    valid.forEach(([value, type]) => assert.equal(validateValue(value, type), true, `${value} as ${type}`));
+
+    const invalid: [string, ColType][] = [
+      ['2026-10-19', 'dtm'],
+      ['2026-10-19 24:00', 'dtm'],
+      ['25:00', 'tim'],
+      ['14:60', 'tim'],
+      ['12', 'chr'],
+    ];
+    invalid.forEach(([value, type]) => assert.equal(validateValue(value, type), false, `${value} as ${type}`));
+    // Empty cells are always allowed, whatever the type.
+    assert.equal(validateValue('', 'dtm'), true);
   });
 });

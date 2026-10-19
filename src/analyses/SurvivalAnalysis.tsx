@@ -8,6 +8,8 @@ import {
 import { survivalReport, survivalTables } from '../stats/survival';
 import { ResultTables } from '../components/ResultTable';
 import { parseNum } from '../stats/core';
+import { analysisRows, groupColumnIndexes, type CategoryLevel, type GridData } from '../grid/types';
+import { LevelsEditor, LEVELS_BUTTON_CLASS } from '../grid/LevelsEditor';
 import type { ReportSpec } from '../stats/report';
 
 export interface SurvivalHandle {
@@ -15,7 +17,9 @@ export interface SurvivalHandle {
 }
 
 interface Props {
-  grid: { cols: { name: string }[]; rows: string[][] };
+  grid: GridData;
+  onLevels: (column: number, levels: CategoryLevel[], reference?: string) => void;
+  onRecode: (column: number, mapping: Record<string, string>) => void;
   ciLevel: number;
   onOutput: (node: React.ReactNode, report: ReportSpec | null) => void;
   onError: (message: string) => void;
@@ -26,7 +30,7 @@ const inputClass =
 const COLORS = ['#4f9cf9', '#34d399', '#fbbf24', '#a78bfa', '#f87171', '#38bdf8'];
 
 export const SurvivalAnalysis = forwardRef<SurvivalHandle, Props>(
-  ({ grid, ciLevel, onOutput, onError }, ref) => {
+  ({ grid, onLevels, onRecode, ciLevel, onOutput, onError }, ref) => {
     const [timeVariable, setTimeVariable] = useState(() => {
       for (let index = 0; index < grid.cols.length; index++) {
         const values = grid.rows.map(row => parseNum(row[index])).filter(value => Number.isFinite(value));
@@ -64,7 +68,8 @@ export const SurvivalAnalysis = forwardRef<SurvivalHandle, Props>(
       }
 
       const rows: { time: number; event: number; group: string }[] = [];
-      grid.rows.forEach(row => {
+      const rowsForAnalysis = groupVariable >= 0 ? analysisRows(grid, [groupVariable]) : grid.rows;
+      rowsForAnalysis.forEach(row => {
         const time = parseNum(row[timeVariable]);
         const label = String(row[eventVariable] ?? '').trim();
         if (!Number.isFinite(time) || time < 0 || label === '') return;
@@ -194,14 +199,24 @@ export const SurvivalAnalysis = forwardRef<SurvivalHandle, Props>(
 
         <div className="flex flex-col gap-1">
           <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">Group (optional)</label>
-          <select className={inputClass} value={groupVariable} onChange={e => setGroupVariable(parseInt(e.target.value, 10))}>
-            <option value={-1}>None</option>
-            {grid.cols.map((column, index) => (
-              <option key={index} value={index}>
-                {column.name}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-1">
+            <select className={inputClass} value={groupVariable} onChange={e => setGroupVariable(parseInt(e.target.value, 10))}>
+              <option value={-1}>None</option>
+              {groupColumnIndexes(grid).map((index) => (
+                <option key={index} value={index}>
+                  {grid.cols[index]?.name}
+                </option>
+              ))}
+            </select>
+            <LevelsEditor
+              grid={grid}
+              column={groupVariable}
+              onLevels={onLevels}
+              onRecode={onRecode}
+              label="Modifica livelli"
+              className={LEVELS_BUTTON_CLASS}
+            />
+          </div>
         </div>
       </div>
     );

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { 
   BarChart3, 
   Settings, 
@@ -12,6 +13,7 @@ import {
   CheckCircle2, 
   AlertCircle,
   ChevronDown,
+  HelpCircle,
   Info
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -72,14 +74,22 @@ import {
   NormalityResult
 } from './statsHelpers';
 import { buildHistogram, pairedValues, parseNum, pooledTTest, welchTTest } from './stats/core';
-import type { ColType, GridData } from './grid/types';
+import type { CategoryLevel, ColType, GridData } from './grid/types';
 import {
   findInvalid as gridFindInvalid,
   invalidByColumn as gridInvalidByColumn,
   coerceGrid as gridCoerce,
 } from './grid/ops';
-import { nonEmptyRowCount, countInvalidCells } from './grid/types';
+import {
+  nonEmptyRowCount,
+  countInvalidCells,
+  analysisRows,
+  groupColumnIndexes,
+  isGroupColumn,
+} from './grid/types';
 import { useGridHistory } from './grid/useGridHistory';
+import { LevelsEditor } from './grid/LevelsEditor';
+import { HelpPanel } from './help/HelpPanel';
 import {
   setCell as gridSetCell,
   addColumnEnd as gridAddColumn,
@@ -100,6 +110,8 @@ import {
   clearRange as gridClearRange,
   fillDownRange as gridFillDown,
   sortByColumn as gridSortByColumn,
+  setColumnLevels as gridSetColumnLevels,
+  recodeColumnValues as gridRecodeColumnValues,
   filterRowIndexes as gridFilterIndexes,
   type RowFilter,
   type RowFilterOp,
@@ -136,6 +148,12 @@ import {
   type TTestParams,
 } from './io/project';
 import { copyText } from './io/clipboard';
+import {
+  capStoredOutputs,
+  extractOutputTitle,
+  sanitizeOutputHtml,
+  type StoredOutput,
+} from './io/outputs';
 import { exportChartsAsPng } from './io/chartExport';
 import { buildReportFromElement } from './io/reportExport';
 
@@ -145,6 +163,17 @@ interface AnalysisConfig {
   label: string;
   icon: React.ReactNode;
 }
+
+/** A console block: live React nodes plus the HTML snapshot stored in the project. */
+interface OutputEntry extends StoredOutput {
+  node?: React.ReactNode;
+}
+
+/** Restored blocks are static: sanitise once, then inject the stored markup. */
+const restoredOutputs = (stored: StoredOutput[] | undefined): OutputEntry[] =>
+  (stored ?? [])
+    .map((entry) => ({ ...entry, html: sanitizeOutputHtml(entry.html) }))
+    .filter((entry) => entry.html.length > 0);
 
 // --- Constants ---
 const PALETTE = ['#4f9cf9', '#34d399', '#f87171', '#fbbf24', '#a78bfa', '#38bdf8', '#fb923c', '#e879f9'];
@@ -201,7 +230,7 @@ export default function App() {
   // Restore the last silent autosave before any state is initialised, so the
   // first render already shows the user's grid and parameters.
   const [boot] = useState<ProjectSnapshot | null>(() => loadAutosaveProject());
-  const [activeTab, setActiveTab] = useState<'data' | 'analysis' | 'settings'>(
+  const [activeTab, setActiveTab] = useState<'data' | 'analysis' | 'settings' | 'help'>(
     boot?.settings.activeTab ?? DEFAULT_SETTINGS.activeTab
   );
   const [activeAnalysis, setActiveAnalysis] = useState<string>(() =>
@@ -260,7 +289,8 @@ export default function App() {
     ran: false,
     issues: [],
   });
-  const [outputs, setOutputs] = useState<React.ReactNode[]>([]);
+  const [outputs, setOutputs] = useState<OutputEntry[]>(() => restoredOutputs(boot?.outputs));
+  const runSeq = useRef(0);
   const [toasts, setToasts] = useState<{ id: number; title: string; msg: string; type: 'ok' | 'warn' | 'error' }[]>([]);
   useEffect(() => {
     // Scroll only the output container: scrollIntoView() also scrolls the
@@ -286,15 +316,31 @@ export default function App() {
   }, [undoGrid, redoGrid]);
 
   // Each run pushes a single block: the written report is part of that block,
-  // so it always closes the run after every table and chart.
+  // so it always closes the run after every table and chart. The block is also
+  // rendered once to static markup so the console survives reloads and .lzs
+  // files; live runs keep their interactive React nodes in this session.
   const pushOutput = (node: React.ReactNode, report: ReportSpec | null) => {
-    setOutputs(prev => [
-      ...prev,
-      <React.Fragment key={`run-${Date.now()}-${prev.length}`}>
+    const block = (
+      <>
         {node}
         {report && <AnalysisReport spec={report} />}
-      </React.Fragment>
-    ]);
+      </>
+    );
+    let html = '';
+    try {
+      html = renderToStaticMarkup(block);
+    } catch (error) {
+      // A failed snapshot must never lose the run that is on screen.
+      console.error('Could not snapshot the output block', error);
+    }
+    const entry: OutputEntry = {
+      id: `run-${Date.now()}-${runSeq.current++}`,
+      title: html ? extractOutputTitle(html) : 'Analysis output',
+      createdAt: new Date().toISOString(),
+      html,
+      node: block,
+    };
+    setOutputs(prev => capStoredOutputs([...prev, entry]));
   };
 
   const showToast = (title: string, msg: string, type: 'ok' | 'warn' | 'error' = 'ok') => {
@@ -319,6 +365,31 @@ export default function App() {
 
   const updateColType = (c: number, type: ColType) => {
     setGrid((prev) => gridSetColType(prev, c, type));
+  };
+
+  // Shared by the grid header and every analysis group selector, so levels can
+  // be edited from the panel where the user is already choosing groups.
+  const updateColumnLevels = (c: number, levels: CategoryLevel[], reference?: string) => {
+    setGrid((prev) => gridSetColumnLevels(prev, c, levels, reference));
+    setValidation((v) => ({ ...v, ran: false }));
+  };
+
+  // Rename / merge / clear the group codes of one column; cells, levels,
+  // reference and (when needed) the column type move together in one undo step.
+  const updateColumnRecode = (c: number, mapping: Record<string, string>) => {
+    const result = gridRecodeColumnValues(grid, c, mapping);
+    if (result.grid === grid) return;
+    setGrid(result.grid);
+    setValidation((v) => ({ ...v, ran: false }));
+    showToast(
+      'Recode',
+      `${result.changed} cells recoded${
+        result.merged > 0 ? `, ${result.merged} group${result.merged === 1 ? '' : 's'} merged` : ''
+      }${
+        result.cleared > 0 ? `, ${result.cleared} cells cleared` : ''
+      }${result.typeChangedTo ? ` · column type → ${result.typeChangedTo}` : ''}`,
+      'ok'
+    );
   };
 
   const csvInputRef = useRef<HTMLInputElement>(null);
@@ -502,6 +573,7 @@ export default function App() {
         corr: corrParams,
         chisq: chisqParams,
       },
+      outputs,
     });
 
   useEffect(() => {
@@ -522,7 +594,7 @@ export default function App() {
     }, 800);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [grid, ioPrefs, ciLevel, activeAnalysis, activeTab, descVars, ttestParams, anovaParams, regParams, corrParams, chisqParams]);
+  }, [grid, ioPrefs, ciLevel, activeAnalysis, activeTab, descVars, ttestParams, anovaParams, regParams, corrParams, chisqParams, outputs]);
 
   const applyProject = (project: ProjectSnapshot) => {
     resetGridHistory(project.grid);
@@ -541,16 +613,17 @@ export default function App() {
     setActiveTab(project.settings.activeTab);
     setIoPrefs(project.prefs);
     savePrefs(project.prefs);
-    // Results belong to the previous grid: keeping them would show numbers
-    // that no longer match the restored data.
-    setOutputs([]);
+    // Output snapshots are restored together with the data they were computed
+    // from, so the console and the grid always belong to the same session.
+    const restored = restoredOutputs(project.outputs);
+    setOutputs(restored);
     setValidation({ ran: false, issues: [] });
     setSelRange(null);
     setFocusCell(null);
     setLastAutosave(new Date().toLocaleTimeString());
     showToast(
       'Project',
-      `Loaded ${nonEmptyRowCount(project.grid.rows)} rows — rerun the analyses to rebuild the output console`,
+      `Loaded ${nonEmptyRowCount(project.grid.rows)} rows and ${restored.length} result block(s)`,
       'ok'
     );
   };
@@ -1402,10 +1475,13 @@ export default function App() {
 
   const runANOVA = () => {
     const { dep, grp, posthoc, useNonParam, kwPosthoc } = anovaParams;
-    
+
+    // Group labels are what tables and charts show; the codes stay in the grid.
+    const rowsForAnalysis = analysisRows(grid, [grp]);
+
     // Group data
     const groups: { [key: string]: number[] } = {};
-    grid.rows.forEach(row => {
+    rowsForAnalysis.forEach(row => {
       const d = parseNum(row[dep]);
       const g = row[grp];
       if (!isNaN(d) && g !== '') {
@@ -1572,7 +1648,7 @@ export default function App() {
     }));
 
     const tables = anovaTables({
-      rows: grid.rows,
+      rows: rowsForAnalysis,
       depIdx: dep,
       grpIdx: grp,
       depName: grid.cols[dep].name,
@@ -2476,6 +2552,13 @@ export default function App() {
           <Settings className="w-3 h-3 inline mr-2" />
           Settings
         </button>
+        <button 
+          onClick={() => setActiveTab('help')}
+          className={`main-tab ${activeTab === 'help' ? 'active' : ''}`}
+        >
+          <HelpCircle className="w-3 h-3 inline mr-2" />
+          Help
+        </button>
       </div>
 
       {/* Content */}
@@ -2720,6 +2803,8 @@ export default function App() {
                 setValidation((v) => ({ ...v, ran: false }));
               }}
               onColType={updateColType}
+              onLevels={updateColumnLevels}
+              onRecode={updateColumnRecode}
               onInsertCol={(at) => setGrid((prev) => gridInsertColumn(prev, at))}
               onDuplicateCol={(c) => setGrid((prev) => gridDuplicateColumn(prev, c))}
               onMoveCol={(c, dir) => setGrid((prev) => gridMoveColumn(prev, c, dir))}
@@ -2930,13 +3015,28 @@ export default function App() {
                     </div>
                     <div className="flex flex-col gap-1">
                       <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">Group Var</label>
-                      <select 
-                        className="bg-surface3 border border-border2 text-text text-[11px] p-1.5 rounded min-w-[120px]"
-                        value={anovaParams.grp}
-                        onChange={(e) => setAnovaParams(p => ({ ...p, grp: parseInt(e.target.value) }))}
-                      >
-                        {grid.cols.map((c, i) => <option key={i} value={i}>{c.name}</option>)}
-                      </select>
+                      <div className="flex items-center gap-1">
+                        <select 
+                          className="bg-surface3 border border-border2 text-text text-[11px] p-1.5 rounded min-w-[120px]"
+                          value={anovaParams.grp}
+                          onChange={(e) => setAnovaParams(p => ({ ...p, grp: parseInt(e.target.value) }))}
+                        >
+                          {groupColumnIndexes(grid).map((i) => (
+                            <option key={i} value={i}>{grid.cols[i].name}</option>
+                          ))}
+                          {!isGroupColumn(grid, anovaParams.grp) && grid.cols[anovaParams.grp] && (
+                            <option value={anovaParams.grp}>{grid.cols[anovaParams.grp].name} (numeric)</option>
+                          )}
+                        </select>
+                        <LevelsEditor
+                          grid={grid}
+                          column={anovaParams.grp}
+                          onLevels={updateColumnLevels}
+                          onRecode={updateColumnRecode}
+                          label="Modifica livelli"
+                          className="tb-btn flex items-center gap-1 h-[29px] px-2 text-[10px] whitespace-nowrap"
+                        />
+                      </div>
                     </div>
                     <div className="flex flex-col gap-1">
                       <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">Post-Hoc</label>
@@ -3260,6 +3360,8 @@ export default function App() {
                   <SurvivalAnalysis
                     ref={survivalRef}
                     grid={grid}
+                    onLevels={updateColumnLevels}
+                    onRecode={updateColumnRecode}
                     ciLevel={ciLevel}
                     onOutput={pushOutput}
                     onError={(message) => showToast('Error', message, 'error')}
@@ -3280,6 +3382,8 @@ export default function App() {
                   <WizardAnalysis
                     ref={wizardRef}
                     grid={grid}
+                    onLevels={updateColumnLevels}
+                    onRecode={updateColumnRecode}
                     ciLevel={ciLevel}
                     onOutput={pushOutput}
                     onOpenAnalysis={(analysisId) => setActiveAnalysis(analysisId)}
@@ -3300,6 +3404,8 @@ export default function App() {
                   <FactorialAnovaAnalysis
                     ref={factorialRef}
                     grid={grid}
+                    onLevels={updateColumnLevels}
+                    onRecode={updateColumnRecode}
                     ciLevel={ciLevel}
                     onOutput={pushOutput}
                     onError={(message) => showToast('Error', message, 'error')}
@@ -3329,6 +3435,8 @@ export default function App() {
                   <AncovaAnalysis
                     ref={ancovaRef}
                     grid={grid}
+                    onLevels={updateColumnLevels}
+                    onRecode={updateColumnRecode}
                     ciLevel={ciLevel}
                     onOutput={pushOutput}
                     onError={(message) => showToast('Error', message, 'error')}
@@ -3359,6 +3467,8 @@ export default function App() {
                   <NonParamRepeatedAnalysis
                     ref={nonParamRepeatedRef}
                     grid={grid}
+                    onLevels={updateColumnLevels}
+                    onRecode={updateColumnRecode}
                     ciLevel={ciLevel}
                     onOutput={pushOutput}
                     onError={(message) => showToast('Error', message, 'error')}
@@ -3430,7 +3540,7 @@ export default function App() {
               ) : (
                 <div className="max-w-4xl mx-auto">
                   {outputs.map((output, i) => (
-                    <div key={`wrapper-${i}`} className="relative output-run group">
+                    <div key={output.id} className="relative output-run group">
                       <button
                         type="button"
                         onClick={() => removeOutput(i)}
@@ -3450,7 +3560,12 @@ export default function App() {
                           </div>
                         </div>
                       )}
-                      {output}
+                      {output.node ?? (
+                        <div
+                          className="restored-output"
+                          dangerouslySetInnerHTML={{ __html: output.html }}
+                        />
+                      )}
                     </div>
                   ))}
                 </div>
@@ -3469,6 +3584,8 @@ export default function App() {
             )}
           </div>
         )}
+
+        {activeTab === 'help' && <HelpPanel />}
 
         {activeTab === 'settings' && (
           <div className="flex-1 overflow-auto scrollbar p-8">

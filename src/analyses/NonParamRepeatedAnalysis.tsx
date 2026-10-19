@@ -22,6 +22,8 @@ import {
 } from '../stats/repeated';
 import { ResultTables } from '../components/ResultTable';
 import { parseNum } from '../stats/core';
+import { analysisRows, groupColumnIndexes, levelLabel, orderedColumnLevels, type CategoryLevel, type GridData } from '../grid/types';
+import { LevelsEditor, LEVELS_BUTTON_CLASS } from '../grid/LevelsEditor';
 import type { ReportSpec } from '../stats/report';
 
 export interface NonParamRepeatedHandle {
@@ -29,7 +31,9 @@ export interface NonParamRepeatedHandle {
 }
 
 interface Props {
-  grid: { cols: { name: string; type: string }[]; rows: string[][] };
+  grid: GridData;
+  onLevels: (column: number, levels: CategoryLevel[], reference?: string) => void;
+  onRecode: (column: number, mapping: Record<string, string>) => void;
   ciLevel: number;
   onOutput: (node: React.ReactNode, report: ReportSpec | null) => void;
   onError: (message: string) => void;
@@ -40,14 +44,10 @@ type Mode = 'friedman' | 'mcnemar' | 'cochran' | 'jonckheere';
 const inputClass =
   'bg-surface3 border border-border2 text-text text-[11px] p-1.5 rounded min-w-[120px]';
 
-const levelsOf = (grid: Props['grid'], index: number): string[] =>
-  Array.from(
-    new Set(
-      grid.rows
-        .map((row) => String(row[index] ?? '').trim())
-        .filter((value) => value !== '')
-    )
-  ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+const levelsOf = (grid: Props['grid'], index: number): string[] => {
+  const col = grid.cols[index];
+  return orderedColumnLevels(col, grid.rows, index).map((level) => levelLabel(col, level.value));
+};
 
 const isNumericColumn = (grid: Props['grid'], index: number): boolean => {
   const values = grid.rows
@@ -89,7 +89,7 @@ const gridTheme = {
 };
 
 export const NonParamRepeatedAnalysis = forwardRef<NonParamRepeatedHandle, Props>(
-  ({ grid, ciLevel, onOutput, onError }, ref) => {
+  ({ grid, onLevels, onRecode, ciLevel, onOutput, onError }, ref) => {
     const [mode, setMode] = useState<Mode>('friedman');
     const [selected, setSelected] = useState<number[]>(() => defaultSelection(grid, 'friedman'));
     const [left, setLeft] = useState(() => {
@@ -104,12 +104,7 @@ export const NonParamRepeatedAnalysis = forwardRef<NonParamRepeatedHandle, Props
       const numeric = grid.cols.map((_, index) => index).filter((index) => isNumericColumn(grid, index));
       return numeric[0] ?? 0;
     });
-    const [group, setGroup] = useState(() => {
-      const categorical = grid.cols
-        .map((_, index) => index)
-        .filter((index) => !isNumericColumn(grid, index));
-      return categorical[0] ?? 1;
-    });
+    const [group, setGroup] = useState(() => groupColumnIndexes(grid)[0] ?? 1);
 
     useEffect(() => {
       setSelected(defaultSelection(grid, mode));
@@ -295,7 +290,7 @@ export const NonParamRepeatedAnalysis = forwardRef<NonParamRepeatedHandle, Props
         return;
       }
       const buckets: number[][] = groupLevels.map(() => []);
-      grid.rows.forEach((row) => {
+      analysisRows(grid, [group]).forEach((row) => {
         const value = parseNum(row[outcome]);
         const label = String(row[group] ?? '').trim();
         const index = groupLevels.indexOf(label);
@@ -410,11 +405,21 @@ export const NonParamRepeatedAnalysis = forwardRef<NonParamRepeatedHandle, Props
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-[10px] text-text3 font-mono uppercase tracking-widest">Ordered groups (2–10)</label>
-              <select className={inputClass} value={group} onChange={(event) => setGroup(Number(event.target.value))}>
-                {grid.cols.map((column, index) => (
-                  <option key={index} value={index}>{column.name}</option>
-                ))}
-              </select>
+              <div className="flex items-center gap-1">
+                <select className={inputClass} value={group} onChange={(event) => setGroup(Number(event.target.value))}>
+                  {groupColumnIndexes(grid).map((index) => (
+                    <option key={index} value={index}>{grid.cols[index]?.name}</option>
+                  ))}
+                </select>
+                <LevelsEditor
+                  grid={grid}
+                  column={group}
+                  onLevels={onLevels}
+                  onRecode={onRecode}
+                  label="Modifica livelli"
+                  className={LEVELS_BUTTON_CLASS}
+                />
+              </div>
             </div>
             <p className="text-[10px] text-text3 max-w-[220px] self-end pb-1">
               Il test usa l’ordine alfabetico/numerico dei livelli del gruppo.

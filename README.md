@@ -9,7 +9,10 @@ LazStats JS provides a spreadsheet-like data editor and a full suite of parametr
 ## Features
 
 ### Data Editor
-- Interactive spreadsheet grid with typed columns (num, int, dec, str, alp, chr, bol, dat)
+- Interactive spreadsheet grid with typed columns (num, int, dec, cat, str, id, bol, dat, dtm, tim, alp, chr)
+- **Editable column names**: double-click a header, use the pencil shown on hover, or the column menu's *Rename column*; names are trimmed and kept unique (`Score`, `Score_2`)
+- **Type dropdown under each header**: `num` numeric auto-detect, `int` integer, `dec` decimal, `cat` categorical, `str` free text, `id` identifier, `bol` boolean, `dat` date, `dtm` date-time, `tim` time, `alp` alphabetic, `chr` single character
+- **Group levels editor** (toolbar under the type selector, `src/grid/LevelsEditor.tsx`): code + label, display order, reference level for model-based analyses and the count of rows per code; cells become dropdowns of the declared levels, while the stored value stays the code. "Read data" imports the values already present. It appears for `cat` columns and for every column offered as a grouping variable (integer codes with 2–12 levels, `bol`, small text/date columns), and the same modal is reachable with **Modifica livelli** next to the group selector in the Wizard, ANOVA, ANCOVA, Factorial ANOVA, Survival and Non-parametric RM panels, so labels and reference can be edited without leaving the analysis
 - Per-cell regex validation
 - **CSV import/export** with quoted fields, comma or semicolon delimiters, decimal-comma normalisation and automatic column-type inference
 - Row/column count displayed in status bar
@@ -18,10 +21,16 @@ LazStats JS provides a spreadsheet-like data editor and a full suite of parametr
 - **Sort ascending/descending per column** from the column context menu (undoable)
 - **Find & replace** with regex, case sensitivity and single-column scope; whitespace trim, duplicates/empty-row cleanup and mean/median/mode imputation live in the Clean panel
 
+### Help
+- **In-app HELP tab** (next to Settings) with eight inner tabs: Overview, Data Editor, Data prep, Groups & levels, Analyses, Output & reports, Recipes and Shortcuts & settings
+- Every block is written as a numbered sequence of the buttons and selectors the user actually sees, with a worked example, tables for reference and highlighted tips
+- The Analyses tab documents all nineteen panels (steps + example each); the Recipes tab walks through twelve end-to-end questions
+- Content lives in `src/help/helpContent.ts` as plain data and is guarded by `src/help/helpContent.test.ts` (structure, coverage of every analysis panel, presence of the main tool labels)
+
 ### Project persistence
-- **Silent autosave** of the grid, CI level, analysis parameters and IO preferences to `localStorage` (debounced), restored automatically on the next visit
-- **Save/Open `.lzs` projects**: a versioned JSON file with the dataset, settings and parameters; invalid, corrupted or newer-version files are rejected with a readable message
-- Rendered results are not part of the project file (they are React nodes): loading a project clears the output console so old tables can never be mistaken for the restored data — rerun the analyses
+- **Silent autosave** of the grid, CI level, analysis parameters, IO preferences and the output console to `localStorage` (debounced), restored automatically on the next visit
+- **Save/Open `.lzs` projects**: a versioned JSON file with the dataset, settings, parameters and results; invalid, corrupted or newer-version files are rejected with a readable message
+- **Output console persistence**: every run also stores a static HTML snapshot (tables, Victory charts as inline SVG and the written report) capped at 20 blocks / 1.5 MB. Restored blocks are sanitised before injection and are read-only snapshots — Copy, Charts PNG, Report HTML and Results XLSX keep working, while per-table TSV buttons and chart tooltips exist only on live runs. Panel-internal parameters still restart from the grid defaults
 
 ### Statistical Analyses
 
@@ -45,11 +54,16 @@ LazStats JS provides a spreadsheet-like data editor and a full suite of parametr
 | **Cox (PH)** | Proportional hazards regression: partial likelihood with Breslow ties, Newton–Raphson with step halving, hazard ratios with CIs, LR/Wald/score tests, Harrell's C, Breslow baseline hazard, time-interaction test for proportional hazards, forest plot | Automatic dummy coding of small categorical covariates |
 | **Statistical Wizard** | Guided choice of the analysis: profiles every column, runs the assumption checks that matter (normality, Levene, paired differences) and points to the right panel with the exact columns to select | Alternative test when the assumptions fail |
 
+The group modal also **recodes values**: open it from the grid header or from any group selector and switch to *Recode values* to rename codes, merge two codes into one group, or clear them, with a preview of the affected cells before applying.
+
+Group pickers are type-aware: `cat`, `bol` and small `str`/date/alpha columns are offered, integer codes with 2–12 levels are accepted, while `id` and continuous `num`/`dec` columns are excluded. Tables, charts and reports show the declared labels, and ANCOVA uses the selected reference level (treatment coding).
+
 ### Results
 - **Per-table TSV copy** directly from the table header, with the same formatting shown on screen
 - **Charts PNG**: every chart in the output console is rasterised at 2× on a dark background and downloaded as its own file
 - **Printable HTML report**: a self-contained document (tables, inline SVG charts and the written reports) with print styles, ready for *Print → Save as PDF*
 - **Per-run removal** in the output console, next to the existing global *Clear*
+- Restored runs keep their tables, charts and reports after a reload; the console header shows the stored snapshots exactly as they were produced
 
 ### Visualization
 - Bar charts, boxplots, scatter plots, line charts, histograms
@@ -126,24 +140,29 @@ lazstatjs/
     ├── statsHelpers.ts     # Legacy custom statistical functions
     ├── stats/              # Testable statistical modules (descriptive, ttest, anova, factorial,
     │                       #   regression, logistic, correlation, chisquare, contingency,
-    │                       #   repeated, repeatedAnova, distfit, samplesize, timeseries, arima,
-    │                       #   survival, cox,
-    │                       #   wizard, report)
+    │                       #   repeated, repeatedAnova, ancova, multivariate, distfit,
+    │                       #   samplesize, timeseries, arima, survival, cox, wizard, report)
     ├── analyses/           # Parameter panels + charts for the newer analyses
-    ├── io/                 # Smart IO (detect/readers/writers, import wizard, export dialog),
+    ├── io/                 # Smart IO (detect/readers/writers, xlsx, import wizard, export dialog),
     │                       #   table TSV copy, chart PNG export, printable HTML report,
-    │                       #   .lzs project schema + autosave storage
+    │                       #   .lzs project schema + autosave storage, output snapshots
+    ├── help/               # In-app HELP tab content (plain data) and its renderer
     ├── components/         # Reusable ResultTable and AnalysisReport renderers
     └── index.css           # Tailwind styles + dark theme
 ```
 
 ### Key Source Files
 
-- **`src/App.tsx`** (~3300 lines) — Application UI, chart wiring and analysis orchestration.
+- **`src/App.tsx`** (~3650 lines) — Application UI, chart wiring and analysis orchestration.
 - **`src/stats/`** — Pure statistic builders returning typed `TableSpec` objects. Every builder has reference tests against SciPy/NumPy values (mean CIs, Levene, Welch ANOVA, effect sizes, regression, correlations, odds ratios).
 - **`src/stats/report.ts`** — Builds the plain-language `ReportSpec` for each analysis by reading the already computed tables (headline, effect size, assumptions, glossary, limits). Because it never recomputes statistics, the prose cannot disagree with the numbers and follows the selected CI level. The newer modules (`contingency`, `factorial`, `logistic`, `distfit`, `samplesize`) keep their report builder next to the computation.
 - **`src/analyses/`** — Self-contained tabs for Contingency (R×C), Sample Size / Power, Distribution Fit, Factorial ANOVA, Logistic Regression, Time Series, Survival, Cox and the Wizard: they own their parameters, run through an imperative `run()` handle and append tables, charts and the written report to the output console. The Wizard does not re-implement tests: it opens the real panel with `onOpenAnalysis`.
 - **`src/components/AnalysisReport.tsx`** — Renders that report as a card closing every run of an analysis, after all tables and charts.
+- **`src/help/helpContent.ts`** — The whole in-app guide as plain data (tabs, sections, blocks, steps, examples, tables, tips) so the wording can be reviewed and tested without a DOM; `src/help/HelpPanel.tsx` renders it with a tab bar and numbered steps.
+- **`src/grid/types.ts`** — Column types plus the categorical-level model (`levels`, `reference`), group-column detection and the label substitution used by the analyses.
+- **`src/grid/LevelsEditor.tsx`** — Reusable group modal with a trigger button and two modes: *Levels* (code, label, order, reference, per-code row count, "Read data", add/remove) and *Recode values* (rename, merge, clear the group codes with a live preview). Shared by the data-grid header and the analysis group selectors, so one Apply is one undo step wherever it is opened.
+- **`recodeColumnValues`** in `src/grid/ops.ts` — Pure recoding of one column: cells are matched against their original value (so `1→2` / `2→1` swaps work), declared levels follow the mapping keeping their labels, merged codes keep the first label, the reference follows its code or is dropped, and the column becomes `cat` when the new codes no longer satisfy its type.
+- **`src/io/outputs.ts`** — Static snapshots of the output console: title extraction, count/character caps, validation on load and a DOMParser-based sanitiser for restored HTML.
 - **`src/statsHelpers.ts`** — Legacy hand-implemented tests: Fisher's Exact Test, Wilcoxon Signed-Rank, Mann-Whitney U, Kruskal-Wallis H, Theil-Sen regression, Kendall's Tau-b, Jarque-Bera and Kolmogorov-Smirnov normality tests.
 
 ## Scripts
