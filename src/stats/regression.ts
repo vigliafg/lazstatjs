@@ -12,6 +12,7 @@ import {
   zCrit,
 } from './distributions';
 import { interpretR } from './format';
+import { eigenSymmetric } from './linalg';
 
 export interface RegressionTablesOptions {
   rows: string[][];
@@ -178,6 +179,105 @@ export const regressionTables = (options: RegressionTablesOptions): TableSpec[] 
   const maxCook = Math.max(...cooks.map(value => (isFinite(value) ? value : 0)));
   const cookOutliers = cooks.filter(value => value > 1).length;
   const maxLeverage = Math.max(...leverage.map(value => (isFinite(value) ? value : 0)));
+
+  // White test: squared residuals on the linear terms, their squares and the
+  // pairwise cross-products. n·R² is asymptotically χ² with one df per
+  // auxiliary regressor (intercept excluded).
+  const whiteColumns: number[][] = [];
+  predictors.forEach(values => whiteColumns.push(values));
+  predictors.forEach(values => whiteColumns.push(values.map(value => value * value)));
+  for (let i = 0; i < predictors.length; i += 1) {
+    for (let j = i + 1; j < predictors.length; j += 1) {
+      whiteColumns.push(predictors[i].map((value, row) => value * predictors[j][row]));
+    }
+  }
+  let whiteStat = NaN;
+  let whiteP = NaN;
+  let whiteDf = NaN;
+  if (whiteColumns.length + 1 < n) {
+    const whiteX: Matrix = validRows.map((_, row) => [1, ...whiteColumns.map(column => column[row])]);
+    const whiteFit = fitOls(squaredResiduals, whiteX);
+    if (whiteFit && whiteFit.r2 >= 0) {
+      whiteDf = whiteX[0].length - 1;
+      whiteStat = n * whiteFit.r2;
+      whiteP = chi2SF(whiteStat, whiteDf);
+    }
+  }
+
+  // Ramsey RESET (RESET2): add the squared fitted values and test the gain in
+  // fit with an F test against the original model.
+  let resetF = NaN;
+  let resetP = NaN;
+  try {
+    const resetX: Matrix = X.map((row, i) => [...row, fit.fitted[i] * fit.fitted[i]]);
+    const resetFit = fitOls(Y, resetX);
+    if (resetFit && resetFit.mse > 0 && resetFit.sse <= fit.sse) {
+      resetF = (fit.sse - resetFit.sse) / resetFit.mse;
+      resetP = fSF(resetF, 1, resetFit.df);
+    }
+  } catch {
+    // leave NaN
+  }
+
+  // DFBETAS: standardized change in each coefficient when observation i is
+  // dropped, using the Sherman–Morrison update for b(i) and its covariance.
+  let dfbetasMax = NaN;
+  let dfbetasCount = 0;
+  if (fit.df > 1) {
+    const threshold = 2 / Math.sqrt(n);
+    let max = 0;
+    let count = 0;
+    let computed = false;
+    for (let i = 0; i < n; i += 1) {
+      const h = leverage[i];
+      if (!(h < 1)) continue;
+      const denom = 1 - h;
+      const residual = fit.residuals[i];
+      const u = multiplyVector(fit.xtxInv, X[i]);
+      const mseI = (fit.sse - (residual * residual) / denom) / (fit.df - 1);
+      if (!(mseI >= 0)) continue;
+      for (let j = 0; j < fit.coef.length; j += 1) {
+        const seI = Math.sqrt(mseI * (fit.xtxInv[j][j] + (u[j] * u[j]) / denom));
+        if (!(seI > 0)) continue;
+        const dfbeta = (u[j] * residual) / denom / seI;
+        computed = true;
+        if (Number.isFinite(dfbeta)) {
+          max = Math.max(max, Math.abs(dfbeta));
+          if (Math.abs(dfbeta) > threshold) count += 1;
+        }
+      }
+    }
+    if (computed) {
+      dfbetasMax = max;
+      dfbetasCount = count;
+    }
+  }
+
+  // Belsley condition index: singular values of the unit-scaled design.
+  let conditionIndex = NaN;
+  let conditionCount = 0;
+  try {
+    const width = X[0].length;
+    const norms = Array.from({ length: width }, (_, j) =>
+      Math.sqrt(X.reduce((sum, row) => sum + row[j] * row[j], 0))
+    );
+    const scaled = X.map(row => row.map((value, j) => (norms[j] > 0 ? value / norms[j] : 0)));
+    const ztz: Matrix = Array.from({ length: width }, (_, i) =>
+      Array.from({ length: width }, (_, j) =>
+        scaled.reduce((sum, row) => sum + row[i] * row[j], 0)
+      )
+    );
+    const eigen = eigenSymmetric(ztz);
+    if (eigen.values.length > 0 && eigen.values[0] > 0) {
+      const indices = eigen.values.map(value =>
+        Math.sqrt(eigen.values[0] / Math.max(value, 1e-12))
+      );
+      conditionIndex = Math.max(...indices);
+      conditionCount = indices.filter(value => value > 30).length;
+    }
+  } catch {
+    // leave NaN
+  }
 
   const standardizedResiduals = fit.residuals.map((residual, i) =>
     fit.mse > 0 && leverage[i] < 1 ? residual / (Math.sqrt(fit.mse) * Math.sqrt(1 - leverage[i])) : NaN
@@ -351,9 +451,21 @@ export const regressionTables = (options: RegressionTablesOptions): TableSpec[] 
       { metric: "Cook's D > 1", value: cookOutliers, note: 'numero di osservazioni' },
       { metric: 'Breusch–Pagan LM', value: bpStat, note: 'eteroschedasticità dei residui' },
       { metric: 'Breusch–Pagan p', value: bpP, note: `χ² con ${k} df` },
+      { metric: 'White LM', value: whiteStat, note: 'quadrati e prodotti incrociati dei predittori' },
+      { metric: 'White p', value: whiteP, note: `χ² con ${whiteDf} df` },
+      { metric: 'RESET F (ŷ²)', value: resetF, note: 'non linearità da potenze dei valori adattati' },
+      { metric: 'RESET p', value: resetP, note: 'F con 1 e df del modello aumentato' },
+      { metric: '|DFBETAS| massimo', value: dfbetasMax, note: 'influenza su singolo coefficiente' },
+      { metric: 'DFBETAS oltre 2/√n', value: dfbetasCount, note: `soglia ${(2 / Math.sqrt(n)).toFixed(3)}` },
+      { metric: 'Condition index massimo', value: conditionIndex, note: 'X scalato a norma unitaria; > 30 collinearità' },
+      { metric: 'Condition index > 30', value: conditionCount, note: 'numero di dimensioni coinvolte' },
       { metric: 'Residui studentizzati |z| > 3', value: residualOutliers, note: 'outlier sui residui studentizzati' },
     ],
-    notes: ['Breusch–Pagan richiede l’ipotesi di normalità dei residui; con N piccolo ha potenza limitata.'],
+    notes: [
+      'Breusch–Pagan richiede l’ipotesi di normalità dei residui; con N piccolo ha potenza limitata.',
+      'White usa n·R² della regressione ausiliaria (quadrati e prodotti incrociati); RESET2 aggiunge ŷ². DFBETAS misura il cambio standardizzato di un coefficiente eliminando un’osservazione.',
+      'Condition index di Belsley calcolato sugli autovalori di XᵀX dopo scala a norma unitaria: valori > 30 suggeriscono collinearità, > 100 sono gravi.',
+    ],
   });
 
   const residualRows = [

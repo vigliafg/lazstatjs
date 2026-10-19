@@ -61,6 +61,11 @@ VIF e Breusch-Pagan già presenti. Audit puntuale di `regression.ts` prima di de
   esistevano già nei pannelli Clean/Transform; il filtro non tocca i dati usati
   dalle analisi (`rowMatchesFilter` in `src/grid/ops.ts`).
 
+- **#8 Diagnostica regressione — fatto (2026-10-19):** VIF e Breusch–Pagan
+  esistevano; aggiunti White (quadrati + prodotti incrociati), RESET2, DFBETAS
+  (soglia 2/√n), condition index di Belsley e conteggi. Autovalori con Jacobi
+  in `src/stats/linalg.ts`, reference test contro NumPy/SciPy.
+
 ## Contratto per nuove analisi
 Builder puro in `src/stats/` + reference test contro SciPy/R + `ReportSpec`
 auto-generato. Verifica: `npm run lint` + `npm test` (copre stats+io+grid).

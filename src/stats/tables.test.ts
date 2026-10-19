@@ -233,6 +233,17 @@ test('regression tables match SciPy/NumPy', () => {
   close(coef.rows[1].se as number, 0.1198386418, 1e-9);
   close(coef.rows[1].p as number, 0.0002801805, 1e-9);
   close(coef.rows[1].vif as number, 1);
+
+  const diagnostics = table(tables, 'reg-diagnostics');
+  const diag = (metric: string) => diagnostics.rows.find(r => r.metric === metric)?.value as number;
+  close(diag('White LM'), 4.6489911622, 1e-7);
+  close(diag('White p'), 0.0978327803, 1e-8);
+  close(diag('RESET F (ŷ²)'), 0.5882352941, 1e-9);
+  close(diag('RESET p'), 0.4777340976, 1e-9);
+  close(diag('|DFBETAS| massimo'), 0.6062481193, 1e-9);
+  assert.equal(diag('DFBETAS oltre 2/√n'), 0);
+  close(diag('Condition index massimo'), 4.1678536722, 1e-9);
+  assert.equal(diag('Condition index > 30'), 0);
 });
 
 test('correlation tables expose N, p-values, CIs and partials', () => {
