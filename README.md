@@ -35,6 +35,7 @@ LazStats JS provides a spreadsheet-like data editor and a full suite of parametr
 | **Chi-Square** | Pearson χ², likelihood-ratio G², Yates, standardized/adjusted residuals, cell contributions, φ, Cramér's V, odds ratio, relative risk, risk difference with CIs | Fisher's Exact Test |
 | **Contingency (R×C)** | Pearson χ², likelihood-ratio G², any table size, expected counts, standardized/adjusted residuals, cell contributions, Cramér's V, contingency coefficient | Yates (2×2), Fisher's Exact (2×2), Monte Carlo p-value with fixed margins when expected counts are small |
 | **Non-parametric RM** | — | Friedman with Kendall's W and **Nemenyi** post-hoc (studentized-range critical values), **McNemar** exact + Yates, **Cochran Q**, **Jonckheere–Terpstra** trend test with effect size |
+| **Repeated ANOVA** | One-way within-subject: SS decomposition, partial and generalized η², **Mauchly** sphericity test with second-order correction, **Greenhouse–Geisser** and **Huynh–Feldt** ε and corrected p-values, descriptive means with CI | — |
 | **Factorial ANOVA** | Two-way ANOVA with optional A×B interaction, sequential SS/Type I (= Type III when balanced), partial η², ω², cell and marginal means, interaction plot, R²/RMSE | Ranks-based alternatives are not provided for the two-way design |
 | **Logistic Regression** | Binary outcome, IRLS estimation, odds ratios with Wald CIs, LR test, McFadden/Cox–Snell/Nagelkerke R², AIC/BIC, classification table, sensitivity/specificity, AUC, probability curve, separation warning | — |
 | **Distribution Fit** | MLE fitting of Normal, Lognormal, Exponential, Gamma and Weibull, AIC/BIC ranking, KS and Anderson–Darling, percentiles, probability plot | — |
@@ -125,7 +126,8 @@ lazstatjs/
     ├── statsHelpers.ts     # Legacy custom statistical functions
     ├── stats/              # Testable statistical modules (descriptive, ttest, anova, factorial,
     │                       #   regression, logistic, correlation, chisquare, contingency,
-    │                       #   repeated, distfit, samplesize, timeseries, arima, survival, cox,
+    │                       #   repeated, repeatedAnova, distfit, samplesize, timeseries, arima,
+    │                       #   survival, cox,
     │                       #   wizard, report)
     ├── analyses/           # Parameter panels + charts for the newer analyses
     ├── io/                 # Smart IO (detect/readers/writers, import wizard, export dialog),

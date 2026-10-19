@@ -73,6 +73,12 @@ VIF e Breusch-Pagan già presenti. Audit puntuale di `regression.ts` prima di de
   `src/stats/repeated.ts`, pannello `src/analyses/NonParamRepeatedAnalysis.tsx`,
   report generati dalle tabelle e test contro SciPy.
 
+- **#5 Misure ripetute parametriche — fatto (2026-10-19):** ANOVA within a una
+  via con scomposizione SS, η²p/η²G, Mauchly (approssimazione χ² con termine
+  del second'ordine come R/pingouin), ε GG/HF e p corretti, descrittive con CI.
+  Modulo `src/stats/repeatedAnova.ts`, pannello dedicato e report; reference
+  test contro NumPy/SciPy. ANCOVA resta non implementata (alternativa non scelta).
+
 ## Contratto per nuove analisi
 Builder puro in `src/stats/` + reference test contro SciPy/R + `ReportSpec`
 auto-generato. Verifica: `npm run lint` + `npm test` (copre stats+io+grid).
